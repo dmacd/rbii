@@ -1,0 +1,46 @@
+{
+  "scenario_name": "scenario_b_compositional_curriculum",
+  "stream_length_characters": 21000,
+  "final_cumulative_algorithm_loss_bits": 1695.0655168154458,
+  "final_cumulative_baseline_loss_bits": 69760.48999265819,
+  "final_cumulative_compression_gain_bits": 68065.42447584274,
+  "number_of_episodes": 7,
+  "reacquisition_measurements": [
+    {
+      "task_name": "numeric_progression_step_1",
+      "return_index": 0,
+      "episode_start_index": 0,
+      "episode_end_index": 3000,
+      "episode_length": 3000,
+      "reacquisition_delay": 1,
+      "reacquisition_excess_loss_bits": 0.0
+    },
+    {
+      "task_name": "numeric_progression_step_1",
+      "return_index": 1,
+      "episode_start_index": 15000,
+      "episode_end_index": 18000,
+      "episode_length": 3000,
+      "reacquisition_delay": 1,
+      "reacquisition_excess_loss_bits": -3.3178835401570086
+    },
+    {
+      "task_name": "numeric_progression_step_2",
+      "return_index": 0,
+      "episode_start_index": 3000,
+      "episode_end_index": 6000,
+      "episode_length": 3000,
+      "reacquisition_delay": 1,
+      "reacquisition_excess_loss_bits": -2.3186322021591312
+    },
+    {
+      "task_name": "numeric_progression_step_2",
+      "return_index": 1,
+      "episode_start_index": 18000,
+      "episode_end_index": 21000,
+      "episode_length": 3000,
+      "reacquisition_delay": 1,
+      "reacquisition_excess_loss_bits": -2.318632188617223
+    }
+  ]
+}
