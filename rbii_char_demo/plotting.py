@@ -10,7 +10,7 @@ import matplotlib.pyplot as matplotlib_plotting  # noqa: E402
 from metrics import (
     compute_cumulative_sum,
     compute_cumulative_compression_gain_bits,
-    reacquisition_measurement,
+    ReacquisitionMeasurement,
 )
 
 
@@ -70,7 +70,7 @@ def plot_cumulative_compression_gain(
 
 def plot_reacquisition_delay(
     output_file_path: Path,
-    measurements: list[reacquisition_measurement],
+    measurements: list[ReacquisitionMeasurement],
     title: str = "Reacquisition delay (steps until low regret)",
 ) -> None:
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +94,7 @@ def plot_reacquisition_delay(
 
 def plot_reacquisition_excess_loss(
     output_file_path: Path,
-    measurements: list[reacquisition_measurement],
+    measurements: list[ReacquisitionMeasurement],
     title: str = "Reacquisition excess loss (regret paid before reacquisition)",
 ) -> None:
     output_file_path.parent.mkdir(parents=True, exist_ok=True)

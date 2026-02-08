@@ -7,14 +7,14 @@ import numpy as numpy
 
 
 @dataclass(frozen=True)
-class primitive_definition:
+class PrimitiveDefinition:
     callable_function: Callable[..., Any]
     description_length_bits: int
 
 
-class primitive_library:
+class PrimitiveLibrary:
     def __init__(self) -> None:
-        self._definitions: dict[str, primitive_definition] = {}
+        self._definitions: dict[str, PrimitiveDefinition] = {}
 
     def register_primitive(
         self,
@@ -22,12 +22,12 @@ class primitive_library:
         callable_function: Callable[..., Any],
         description_length_bits: int,
     ) -> None:
-        self._definitions[name] = primitive_definition(
+        self._definitions[name] = PrimitiveDefinition(
             callable_function=callable_function,
             description_length_bits=description_length_bits,
         )
 
-    def get_definition(self, name: str) -> primitive_definition:
+    def get_definition(self, name: str) -> PrimitiveDefinition:
         if name not in self._definitions:
             raise KeyError(f"Unknown primitive: {name}")
         return self._definitions[name]
@@ -36,8 +36,8 @@ class primitive_library:
         return sorted(self._definitions.keys())
 
 
-def create_default_primitive_library() -> primitive_library:
-    library = primitive_library()
+def create_default_primitive_library() -> PrimitiveLibrary:
+    library = PrimitiveLibrary()
 
     # ---- Control and numeric primitives (minimal but useful) ----
 

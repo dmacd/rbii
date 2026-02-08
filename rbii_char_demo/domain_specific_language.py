@@ -5,60 +5,60 @@ from typing import Any, Protocol
 
 import numpy as numpy
 
-from character_vocabulary import character_vocabulary
-from primitive_library import primitive_library
+from character_vocabulary import CharacterVocabulary
+from primitive_library import PrimitiveLibrary
 
 
 @dataclass(frozen=True)
-class prediction_features:
+class PredictionFeatures:
     recent_character_indices: tuple[int, ...]
     bigram_probability_distribution: numpy.ndarray
     trigram_probability_distribution: numpy.ndarray
 
 
 @dataclass(frozen=True)
-class domain_specific_language_evaluation_context:
-    character_vocabulary: character_vocabulary
-    prediction_features: prediction_features
+class DomainSpecificLanguageEvaluationContext:
+    character_vocabulary: CharacterVocabulary
+    prediction_features: PredictionFeatures
     probability_floor: float
 
 
-class frozen_program_store(Protocol):
+class FrozenProgramStore(Protocol):
     def get_program(self, program_identifier: str) -> Any: ...
 
 
-class domain_specific_language_expression(Protocol):
+class DomainSpecificLanguageExpression(Protocol):
     def evaluate(
         self,
-        evaluation_context: domain_specific_language_evaluation_context,
-        primitive_library: primitive_library,
-        frozen_store: frozen_program_store,
+        evaluation_context: DomainSpecificLanguageEvaluationContext,
+        primitive_library: PrimitiveLibrary,
+        frozen_store: FrozenProgramStore,
     ) -> Any: ...
 
 
 @dataclass(frozen=True)
-class constant_expression:
+class ConstantExpression:
     value: Any
 
     def evaluate(
         self,
-        evaluation_context: domain_specific_language_evaluation_context,
-        primitive_library: primitive_library,
-        frozen_store: frozen_program_store,
+        evaluation_context: DomainSpecificLanguageEvaluationContext,
+        primitive_library: PrimitiveLibrary,
+        frozen_store: FrozenProgramStore,
     ) -> Any:
         return self.value
 
 
 @dataclass(frozen=True)
-class primitive_call_expression:
+class PrimitiveCallExpression:
     primitive_name: str
-    argument_expressions: tuple[domain_specific_language_expression, ...]
+    argument_expressions: tuple[DomainSpecificLanguageExpression, ...]
 
     def evaluate(
         self,
-        evaluation_context: domain_specific_language_evaluation_context,
-        primitive_library: primitive_library,
-        frozen_store: frozen_program_store,
+        evaluation_context: DomainSpecificLanguageEvaluationContext,
+        primitive_library: PrimitiveLibrary,
+        frozen_store: FrozenProgramStore,
     ) -> Any:
         definition = primitive_library.get_definition(self.primitive_name)
         evaluated_arguments = [
@@ -69,14 +69,14 @@ class primitive_call_expression:
 
 
 @dataclass(frozen=True)
-class frozen_program_call_expression:
+class FrozenProgramCallExpression:
     frozen_program_identifier: str
 
     def evaluate(
         self,
-        evaluation_context: domain_specific_language_evaluation_context,
-        primitive_library: primitive_library,
-        frozen_store: frozen_program_store,
+        evaluation_context: DomainSpecificLanguageEvaluationContext,
+        primitive_library: PrimitiveLibrary,
+        frozen_store: FrozenProgramStore,
     ) -> Any:
         program = frozen_store.get_program(self.frozen_program_identifier)
         distribution = program.predict_character_distribution(

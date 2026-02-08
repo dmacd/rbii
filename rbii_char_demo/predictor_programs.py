@@ -6,22 +6,22 @@ from typing import Protocol
 import numpy as numpy
 
 from domain_specific_language import (
-    domain_specific_language_evaluation_context,
-    domain_specific_language_expression,
+    DomainSpecificLanguageEvaluationContext,
+    DomainSpecificLanguageExpression,
 )
-from primitive_library import primitive_library
+from primitive_library import PrimitiveLibrary
 
 
-class frozen_program_store_protocol(Protocol):
+class FrozenProgramStoreProtocol(Protocol):
     def get_program(self, program_identifier: str): ...
 
 
-class predictor_program_protocol(Protocol):
+class PredictorProgramProtocol(Protocol):
     def predict_character_distribution(
         self,
-        evaluation_context: domain_specific_language_evaluation_context,
-        primitive_library: primitive_library,
-        frozen_store: frozen_program_store_protocol,
+        evaluation_context: DomainSpecificLanguageEvaluationContext,
+        primitive_library: PrimitiveLibrary,
+        frozen_store: FrozenProgramStoreProtocol,
     ) -> numpy.ndarray: ...
 
 
@@ -43,14 +43,14 @@ def _apply_probability_floor(distribution: numpy.ndarray, probability_floor: flo
 
 
 @dataclass(frozen=True)
-class domain_specific_language_predictor_program:
-    expression: domain_specific_language_expression
+class DomainSpecificLanguagePredictorProgram:
+    expression: DomainSpecificLanguageExpression
 
     def predict_character_distribution(
         self,
-        evaluation_context: domain_specific_language_evaluation_context,
-        primitive_library: primitive_library,
-        frozen_store: frozen_program_store_protocol,
+        evaluation_context: DomainSpecificLanguageEvaluationContext,
+        primitive_library: PrimitiveLibrary,
+        frozen_store: FrozenProgramStoreProtocol,
     ) -> numpy.ndarray:
         result = self.expression.evaluate(evaluation_context, primitive_library, frozen_store)
         if not isinstance(result, numpy.ndarray):

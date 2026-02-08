@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
-class freezing_policy(Protocol):
+class FreezingPolicy(Protocol):
     def should_freeze(
         self,
         time_step_index: int,
@@ -15,7 +15,7 @@ class freezing_policy(Protocol):
 
 
 @dataclass(frozen=True)
-class always_freeze_incumbent_policy:
+class AlwaysFreezeIncumbentPolicy:
     def should_freeze(
         self,
         time_step_index: int,
@@ -27,7 +27,7 @@ class always_freeze_incumbent_policy:
 
 
 @dataclass(frozen=True)
-class incumbent_run_length_freeze_policy:
+class IncumbentRunLengthFreezePolicy:
     minimum_incumbent_run_length: int = 256
     minimum_average_gain_bits_per_character: float = 0.1
 

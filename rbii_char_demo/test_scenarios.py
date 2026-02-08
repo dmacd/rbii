@@ -13,21 +13,21 @@ from corpora import (
 
 
 @dataclass(frozen=True)
-class episode_description:
+class EpisodeDescription:
     start_index: int
     end_index: int
     task_name: str
 
 
 @dataclass(frozen=True)
-class scenario_description:
+class ScenarioDescription:
     scenario_name: str
     stream_text: str
-    episodes: list[episode_description]
+    episodes: list[EpisodeDescription]
 
 
 def _append_episode(
-    episodes: list[episode_description],
+    episodes: list[EpisodeDescription],
     current_text_parts: list[str],
     task_name: str,
     episode_text: str,
@@ -35,10 +35,10 @@ def _append_episode(
     start_index = sum(len(part) for part in current_text_parts)
     current_text_parts.append(episode_text)
     end_index = start_index + len(episode_text)
-    episodes.append(episode_description(start_index=start_index, end_index=end_index, task_name=task_name))
+    episodes.append(EpisodeDescription(start_index=start_index, end_index=end_index, task_name=task_name))
 
 
-def build_scenario_a_context_switching(data_directory: Path) -> scenario_description:
+def build_scenario_a_context_switching(data_directory: Path) -> ScenarioDescription:
     shakespeare_text = load_shakespeare_text(repetitions=50)
     dr_seuss_text = load_dr_seuss_text(data_directory=data_directory, repetitions=120)
     paired_word_text = build_paired_word_text(repetitions=120)
@@ -46,7 +46,7 @@ def build_scenario_a_context_switching(data_directory: Path) -> scenario_descrip
     episode_length = 3000
     cycle_count = 2
 
-    episodes: list[episode_description] = []
+    episodes: list[EpisodeDescription] = []
     stream_text_parts: list[str] = []
 
     shakespeare_offset = 0
@@ -69,18 +69,18 @@ def build_scenario_a_context_switching(data_directory: Path) -> scenario_descrip
         paired_word_offset = (paired_word_offset + episode_length) % max(1, len(paired_word_text) - episode_length)
         _append_episode(episodes, stream_text_parts, "paired_word", episode_text)
 
-    return scenario_description(
+    return ScenarioDescription(
         scenario_name="scenario_a_context_switching",
         stream_text="".join(stream_text_parts),
         episodes=episodes,
     )
 
 
-def build_scenario_b_compositional_curriculum() -> scenario_description:
+def build_scenario_b_compositional_curriculum() -> ScenarioDescription:
     episode_length = 3000
     step_sizes = [1, 2, 3, 4, 5, 1, 2]
 
-    episodes: list[episode_description] = []
+    episodes: list[EpisodeDescription] = []
     stream_text_parts: list[str] = []
 
     for step_size in step_sizes:
@@ -88,14 +88,14 @@ def build_scenario_b_compositional_curriculum() -> scenario_description:
         episode_text = generate_numeric_progression_text(step_size=step_size, length=episode_length)
         _append_episode(episodes, stream_text_parts, task_name, episode_text)
 
-    return scenario_description(
+    return ScenarioDescription(
         scenario_name="scenario_b_compositional_curriculum",
         stream_text="".join(stream_text_parts),
         episodes=episodes,
     )
 
 
-def build_scenario_c_rare_glimpses(data_directory: Path) -> scenario_description:
+def build_scenario_c_rare_glimpses(data_directory: Path) -> ScenarioDescription:
     shakespeare_text = load_shakespeare_text(repetitions=120)
     paired_word_text = build_paired_word_text(repetitions=40)
 
@@ -105,7 +105,7 @@ def build_scenario_c_rare_glimpses(data_directory: Path) -> scenario_description
 
     base_text = shakespeare_text[:long_text_length]
 
-    episodes: list[episode_description] = []
+    episodes: list[EpisodeDescription] = []
     stream_text_parts: list[str] = []
 
     # Interleave: long Shakespeare chunks punctuated by short paired-word glimpses.
@@ -121,20 +121,20 @@ def build_scenario_c_rare_glimpses(data_directory: Path) -> scenario_description
             paired_word_offset = (paired_word_offset + glimpse_length) % max(1, len(paired_word_text) - glimpse_length)
             _append_episode(episodes, stream_text_parts, "paired_word_glimpse", glimpse)
 
-    return scenario_description(
+    return ScenarioDescription(
         scenario_name="scenario_c_rare_glimpses",
         stream_text="".join(stream_text_parts),
         episodes=episodes,
     )
 
 
-def build_scenario_d_non_recurrent_drift() -> scenario_description:
+def build_scenario_d_non_recurrent_drift() -> ScenarioDescription:
     # Random Markov episodes that never repeat.
     episode_length = 4000
     episode_count = 6
     alphabet = "abcdefghijklmnopqrstuvwxyz .,;\n"
 
-    episodes: list[episode_description] = []
+    episodes: list[EpisodeDescription] = []
     stream_text_parts: list[str] = []
 
     for episode_index in range(episode_count):
@@ -146,7 +146,7 @@ def build_scenario_d_non_recurrent_drift() -> scenario_description:
         )
         _append_episode(episodes, stream_text_parts, task_name, episode_text)
 
-    return scenario_description(
+    return ScenarioDescription(
         scenario_name="scenario_d_non_recurrent_drift",
         stream_text="".join(stream_text_parts),
         episodes=episodes,

@@ -9,44 +9,44 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as numpy
 
-from character_vocabulary import character_vocabulary
-from configuration import resource_bounded_incremental_induction_configuration
+from character_vocabulary import CharacterVocabulary
+from configuration import ResourceBoundedIncrementalInductionConfiguration
 from domain_specific_language import (
-    domain_specific_language_evaluation_context,
-    prediction_features,
-    primitive_call_expression,
+    DomainSpecificLanguageEvaluationContext,
+    PredictionFeatures,
+    PrimitiveCallExpression,
 )
-from freezing_policies import freezing_policy
-from memory_mechanisms import memory_mechanism
-from newborn_weight_policies import newborn_weight_assignment_policy
-from predictor_programs import domain_specific_language_predictor_program
-from primitive_library import primitive_library
-from transformer_programs import transformer_program, transformer_candidate
+from freezing_policies import FreezingPolicy
+from memory_mechanisms import MemoryMechanism
+from newborn_weight_policies import NewbornWeightAssignmentPolicy
+from predictor_programs import DomainSpecificLanguagePredictorProgram
+from primitive_library import PrimitiveLibrary
+from transformer_programs import TransformerProgram, TransformerCandidate
 
 
 @dataclass
-class frozen_program_record:
+class FrozenProgramRecord:
     program_identifier: str
-    predictor_program: domain_specific_language_predictor_program
+    predictor_program: DomainSpecificLanguagePredictorProgram
     transformer_description_length_bits: int
     times_recalled: int = 0
     times_frozen: int = 1
 
 
-class frozen_program_store:
+class FrozenProgramStore:
     def __init__(self) -> None:
-        self._records_by_identifier: dict[str, frozen_program_record] = {}
+        self._records_by_identifier: dict[str, FrozenProgramRecord] = {}
         self._program_identifiers_in_insertion_order: list[str] = []
         self._next_identifier_index: int = 0
 
     def add_program(
         self,
-        predictor_program: domain_specific_language_predictor_program,
+        predictor_program: DomainSpecificLanguagePredictorProgram,
         transformer_description_length_bits: int,
     ) -> str:
         program_identifier = f"frozen_program_{self._next_identifier_index}"
         self._next_identifier_index += 1
-        record = frozen_program_record(
+        record = FrozenProgramRecord(
             program_identifier=program_identifier,
             predictor_program=predictor_program,
             transformer_description_length_bits=int(transformer_description_length_bits),
@@ -55,7 +55,7 @@ class frozen_program_store:
         self._program_identifiers_in_insertion_order.append(program_identifier)
         return program_identifier
 
-    def get_program(self, program_identifier: str) -> domain_specific_language_predictor_program:
+    def get_program(self, program_identifier: str) -> DomainSpecificLanguagePredictorProgram:
         return self._records_by_identifier[program_identifier].predictor_program
 
     def list_program_identifiers(self) -> list[str]:
@@ -71,8 +71,8 @@ class frozen_program_store:
 
 
 @dataclass
-class active_pool_entry:
-    predictor_program: domain_specific_language_predictor_program
+class ActivePoolEntry:
+    predictor_program: DomainSpecificLanguagePredictorProgram
     predictor_signature: str
     origin_transformer_description_length_bits: int
     logarithmic_weight_base_two: float
@@ -80,14 +80,14 @@ class active_pool_entry:
 
 
 @dataclass(frozen=True)
-class validation_example:
-    prediction_features: prediction_features
+class ValidationExample:
+    prediction_features: PredictionFeatures
     observed_character_index: int
 
 
 @dataclass
-class resource_bounded_incremental_induction_run_result:
-    character_vocabulary: character_vocabulary
+class ResourceBoundedIncrementalInductionRunResult:
+    character_vocabulary: CharacterVocabulary
     per_step_algorithm_loss_bits: list[float]
     per_step_baseline_loss_bits: list[float]
     per_step_incumbent_signature: list[str]
@@ -115,15 +115,15 @@ def _normalize_logarithmic_weights_base_two(logarithmic_weights_base_two: list[f
     return [value - logarithmic_total_weight_base_two for value in logarithmic_weights_base_two]
 
 
-class resource_bounded_incremental_induction_system:
+class ResourceBoundedIncrementalInductionSystem:
     def __init__(
         self,
-        configuration: resource_bounded_incremental_induction_configuration,
-        primitive_library: primitive_library,
-        transformer_programs: list[transformer_program],
-        memory_mechanism: memory_mechanism,
-        freezing_policy: freezing_policy,
-        newborn_weight_assignment_policy: newborn_weight_assignment_policy,
+        configuration: ResourceBoundedIncrementalInductionConfiguration,
+        primitive_library: PrimitiveLibrary,
+        transformer_programs: list[TransformerProgram],
+        memory_mechanism: MemoryMechanism,
+        freezing_policy: FreezingPolicy,
+        newborn_weight_assignment_policy: NewbornWeightAssignmentPolicy,
         random_seed: int = 0,
     ) -> None:
         self.configuration = configuration
@@ -140,7 +140,7 @@ class resource_bounded_incremental_induction_system:
         total_transformer_weight = float(sum(transformer_weights))
         self.transformer_sampling_probabilities = [weight / total_transformer_weight for weight in transformer_weights]
 
-    def _sample_transformers_for_exploration(self) -> list[transformer_program]:
+    def _sample_transformers_for_exploration(self) -> list[TransformerProgram]:
         number_to_sample = int(self.configuration.exploration_transformer_executions_per_step)
         return self.random_generator.choices(
             population=self.transformer_programs,
@@ -151,15 +151,15 @@ class resource_bounded_incremental_induction_system:
     def _create_thread_pool_executor(self) -> ThreadPoolExecutor:
         return ThreadPoolExecutor(max_workers=self.configuration.maximum_worker_threads)
 
-    def run(self, character_indices: list[int], character_vocabulary: character_vocabulary) -> resource_bounded_incremental_induction_run_result:
-        frozen_store = frozen_program_store()
+    def run(self, character_indices: list[int], character_vocabulary: CharacterVocabulary) -> ResourceBoundedIncrementalInductionRunResult:
+        frozen_store = FrozenProgramStore()
         memory_state = self.memory_mechanism.initialize(character_vocabulary)
 
-        initial_expression = primitive_call_expression("uniform_character_distribution", ())
-        initial_program = domain_specific_language_predictor_program(expression=initial_expression)
+        initial_expression = PrimitiveCallExpression("uniform_character_distribution", ())
+        initial_program = DomainSpecificLanguagePredictorProgram(expression=initial_expression)
 
-        active_pool: list[active_pool_entry] = [
-            active_pool_entry(
+        active_pool: list[ActivePoolEntry] = [
+            ActivePoolEntry(
                 predictor_program=initial_program,
                 predictor_signature=repr(initial_program.expression),
                 origin_transformer_description_length_bits=2,
@@ -169,8 +169,8 @@ class resource_bounded_incremental_induction_system:
         ]
         next_active_instance_identifier_index = 1
 
-        validation_window: list[validation_example] = []
-        candidate_buffer_by_signature: dict[str, transformer_candidate] = {}
+        validation_window: list[ValidationExample] = []
+        candidate_buffer_by_signature: dict[str, TransformerCandidate] = {}
 
         baseline_loss_per_character = math.log2(float(character_vocabulary.size))
         incumbent_signature = active_pool[0].predictor_signature
@@ -189,14 +189,14 @@ class resource_bounded_incremental_induction_system:
                     memory_state=memory_state,
                     probability_floor=self.configuration.probability_floor,
                 )
-                evaluation_context = domain_specific_language_evaluation_context(
+                evaluation_context = DomainSpecificLanguageEvaluationContext(
                     character_vocabulary=character_vocabulary,
                     prediction_features=current_prediction_features,
                     probability_floor=self.configuration.probability_floor,
                 )
 
                 # ---- Evaluate all active predictors in parallel ----
-                future_by_entry: dict[Any, active_pool_entry] = {}
+                future_by_entry: dict[Any, ActivePoolEntry] = {}
                 for entry in active_pool:
                     future = executor.submit(
                         entry.predictor_program.predict_character_distribution,
@@ -251,7 +251,7 @@ class resource_bounded_incremental_induction_system:
 
                 # ---- Update validation window ----
                 validation_window.append(
-                    validation_example(
+                    ValidationExample(
                         prediction_features=current_prediction_features,
                         observed_character_index=int(observed_character_index),
                     )
@@ -302,10 +302,10 @@ class resource_bounded_incremental_induction_system:
                 ):
                     baseline_loss_on_window = float(len(validation_window)) * baseline_loss_per_character
 
-                    def compute_candidate_loss_bits(candidate: transformer_candidate) -> float:
+                    def compute_candidate_loss_bits(candidate: TransformerCandidate) -> float:
                         loss = 0.0
                         for example in validation_window:
-                            context = domain_specific_language_evaluation_context(
+                            context = DomainSpecificLanguageEvaluationContext(
                                 character_vocabulary=character_vocabulary,
                                 prediction_features=example.prediction_features,
                                 probability_floor=self.configuration.probability_floor,
@@ -323,7 +323,7 @@ class resource_bounded_incremental_induction_system:
                     for signature, candidate in candidate_buffer_by_signature.items():
                         candidate_loss_futures[executor.submit(compute_candidate_loss_bits, candidate)] = (signature, candidate)
 
-                    accepted_candidates: list[tuple[str, transformer_candidate, float]] = []
+                    accepted_candidates: list[tuple[str, TransformerCandidate, float]] = []
                     for future in as_completed(list(candidate_loss_futures.keys())):
                         signature, candidate = candidate_loss_futures[future]
                         loss_bits = float(future.result())
@@ -343,7 +343,7 @@ class resource_bounded_incremental_induction_system:
                             log_total_weight_base_two=logarithmic_total_weight_base_two,
                             transformer_description_length_bits=candidate.transformer_description_length_bits,
                         )
-                        new_entry = active_pool_entry(
+                        new_entry = ActivePoolEntry(
                             predictor_program=candidate.predictor_program,
                             predictor_signature=candidate.candidate_signature,
                             origin_transformer_description_length_bits=candidate.transformer_description_length_bits,
@@ -371,7 +371,7 @@ class resource_bounded_incremental_induction_system:
                 ):
                     incumbent_loss_bits = 0.0
                     for example in validation_window:
-                        context = domain_specific_language_evaluation_context(
+                        context = DomainSpecificLanguageEvaluationContext(
                             character_vocabulary=character_vocabulary,
                             prediction_features=example.prediction_features,
                             probability_floor=self.configuration.probability_floor,
@@ -406,7 +406,7 @@ class resource_bounded_incremental_induction_system:
                 active_pool_size_over_time.append(len(active_pool))
                 frozen_store_size_over_time.append(frozen_store.size)
 
-        return resource_bounded_incremental_induction_run_result(
+        return ResourceBoundedIncrementalInductionRunResult(
             character_vocabulary=character_vocabulary,
             per_step_algorithm_loss_bits=per_step_algorithm_loss_bits,
             per_step_baseline_loss_bits=per_step_baseline_loss_bits,

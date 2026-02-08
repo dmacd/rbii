@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class resource_bounded_incremental_induction_configuration:
+class ResourceBoundedIncrementalInductionConfiguration:
     pool_capacity: int = 8
     exploration_transformer_executions_per_step: int = 3
     validation_window_length: int = 256

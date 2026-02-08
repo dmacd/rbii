@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class character_vocabulary:
+class CharacterVocabulary:
     characters: tuple[str, ...]
     character_to_index: dict[str, int]
     index_to_character: dict[int, str]
@@ -14,11 +14,11 @@ class character_vocabulary:
         return len(self.characters)
 
     @staticmethod
-    def from_text(text: str) -> "character_vocabulary":
+    def from_text(text: str) -> "CharacterVocabulary":
         unique_characters = sorted(set(text))
         character_to_index = {character: index for index, character in enumerate(unique_characters)}
         index_to_character = {index: character for character, index in character_to_index.items()}
-        return character_vocabulary(
+        return CharacterVocabulary(
             characters=tuple(unique_characters),
             character_to_index=character_to_index,
             index_to_character=index_to_character,

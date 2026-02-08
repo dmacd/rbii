@@ -4,52 +4,52 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from domain_specific_language import (
-    constant_expression,
-    frozen_program_call_expression,
-    primitive_call_expression,
+    ConstantExpression,
+    FrozenProgramCallExpression,
+    PrimitiveCallExpression,
 )
-from predictor_programs import domain_specific_language_predictor_program
-from primitive_library import primitive_library
-from memory_mechanisms import memory_mechanism, memory_state_protocol
+from predictor_programs import DomainSpecificLanguagePredictorProgram
+from primitive_library import PrimitiveLibrary
+from memory_mechanisms import MemoryMechanism, MemoryStateProtocol
 
 
 @dataclass(frozen=True)
-class transformer_candidate:
-    predictor_program: domain_specific_language_predictor_program
+class TransformerCandidate:
+    predictor_program: DomainSpecificLanguagePredictorProgram
     transformer_description_length_bits: int
     candidate_signature: str
 
 
-class transformer_program(Protocol):
+class TransformerProgram(Protocol):
     description_length_bits: int
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: "frozen_program_store_protocol",
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate | None: ...
+        memory_state: MemoryStateProtocol,
+        frozen_store: "FrozenProgramStoreProtocol",
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate | None: ...
 
 
-class frozen_program_store_protocol(Protocol):
+class FrozenProgramStoreProtocol(Protocol):
     def get_program(self, program_identifier: str): ...
 
 
 @dataclass(frozen=True)
-class uniform_predictor_transformer_program:
+class UniformPredictorTransformerProgram:
     description_length_bits: int = 2
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: frozen_program_store_protocol,
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate:
-        expression = primitive_call_expression("uniform_character_distribution", ())
-        program = domain_specific_language_predictor_program(expression=expression)
-        return transformer_candidate(
+        memory_state: MemoryStateProtocol,
+        frozen_store: FrozenProgramStoreProtocol,
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate:
+        expression = PrimitiveCallExpression("uniform_character_distribution", ())
+        program = DomainSpecificLanguagePredictorProgram(expression=expression)
+        return TransformerCandidate(
             predictor_program=program,
             transformer_description_length_bits=self.description_length_bits,
             candidate_signature=repr(expression),
@@ -57,19 +57,19 @@ class uniform_predictor_transformer_program:
 
 
 @dataclass(frozen=True)
-class bigram_predictor_transformer_program:
+class BigramPredictorTransformerProgram:
     description_length_bits: int = 3
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: frozen_program_store_protocol,
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate:
-        expression = primitive_call_expression("bigram_character_distribution", ())
-        program = domain_specific_language_predictor_program(expression=expression)
-        return transformer_candidate(
+        memory_state: MemoryStateProtocol,
+        frozen_store: FrozenProgramStoreProtocol,
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate:
+        expression = PrimitiveCallExpression("bigram_character_distribution", ())
+        program = DomainSpecificLanguagePredictorProgram(expression=expression)
+        return TransformerCandidate(
             predictor_program=program,
             transformer_description_length_bits=self.description_length_bits,
             candidate_signature=repr(expression),
@@ -77,19 +77,19 @@ class bigram_predictor_transformer_program:
 
 
 @dataclass(frozen=True)
-class trigram_predictor_transformer_program:
+class TrigramPredictorTransformerProgram:
     description_length_bits: int = 4
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: frozen_program_store_protocol,
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate:
-        expression = primitive_call_expression("trigram_character_distribution", ())
-        program = domain_specific_language_predictor_program(expression=expression)
-        return transformer_candidate(
+        memory_state: MemoryStateProtocol,
+        frozen_store: FrozenProgramStoreProtocol,
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate:
+        expression = PrimitiveCallExpression("trigram_character_distribution", ())
+        program = DomainSpecificLanguagePredictorProgram(expression=expression)
+        return TransformerCandidate(
             predictor_program=program,
             transformer_description_length_bits=self.description_length_bits,
             candidate_signature=repr(expression),
@@ -97,17 +97,17 @@ class trigram_predictor_transformer_program:
 
 
 @dataclass(frozen=True)
-class digit_cycle_predictor_transformer_program:
+class DigitCyclePredictorTransformerProgram:
     step_size: int
     description_length_bits: int = 5
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: frozen_program_store_protocol,
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate | None:
+        memory_state: MemoryStateProtocol,
+        frozen_store: FrozenProgramStoreProtocol,
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate | None:
         # Only propose if the recall key context looks digit-heavy.
         recall_key = memory_mechanism.build_recall_key(memory_state)
         recent_characters = []
@@ -121,12 +121,12 @@ class digit_cycle_predictor_transformer_program:
         if digit_count < max(1, len(recent_characters) // 2):
             return None
 
-        expression = primitive_call_expression(
+        expression = PrimitiveCallExpression(
             "digit_cycle_character_distribution",
-            (constant_expression(int(self.step_size)),),
+            (ConstantExpression(int(self.step_size)),),
         )
-        program = domain_specific_language_predictor_program(expression=expression)
-        return transformer_candidate(
+        program = DomainSpecificLanguagePredictorProgram(expression=expression)
+        return TransformerCandidate(
             predictor_program=program,
             transformer_description_length_bits=self.description_length_bits,
             candidate_signature=repr(expression),
@@ -134,16 +134,16 @@ class digit_cycle_predictor_transformer_program:
 
 
 @dataclass(frozen=True)
-class recall_frozen_program_transformer_program:
+class RecallFrozenProgramTransformerProgram:
     description_length_bits: int = 2
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: frozen_program_store_protocol,
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate | None:
+        memory_state: MemoryStateProtocol,
+        frozen_store: FrozenProgramStoreProtocol,
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate | None:
         recall_key = memory_mechanism.build_recall_key(memory_state)
         recalled_identifiers = memory_mechanism.recall_program_identifiers(
             memory_state=memory_state,
@@ -154,9 +154,9 @@ class recall_frozen_program_transformer_program:
             return None
 
         identifier = recalled_identifiers[0]
-        expression = frozen_program_call_expression(identifier)
-        program = domain_specific_language_predictor_program(expression=expression)
-        return transformer_candidate(
+        expression = FrozenProgramCallExpression(identifier)
+        program = DomainSpecificLanguagePredictorProgram(expression=expression)
+        return TransformerCandidate(
             predictor_program=program,
             transformer_description_length_bits=self.description_length_bits,
             candidate_signature=f"recall:{identifier}",
@@ -164,17 +164,17 @@ class recall_frozen_program_transformer_program:
 
 
 @dataclass(frozen=True)
-class mixture_of_recalled_programs_transformer_program:
+class MixtureOfRecalledProgramsTransformerProgram:
     description_length_bits: int = 3
     first_weight: float = 0.5
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: frozen_program_store_protocol,
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate | None:
+        memory_state: MemoryStateProtocol,
+        frozen_store: FrozenProgramStoreProtocol,
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate | None:
         recall_key = memory_mechanism.build_recall_key(memory_state)
         recalled_identifiers = memory_mechanism.recall_program_identifiers(
             memory_state=memory_state,
@@ -185,17 +185,17 @@ class mixture_of_recalled_programs_transformer_program:
             return None
 
         first_identifier, second_identifier = recalled_identifiers[0], recalled_identifiers[1]
-        expression = primitive_call_expression(
+        expression = PrimitiveCallExpression(
             "mixture_of_two_character_distributions",
             (
-                frozen_program_call_expression(first_identifier),
-                frozen_program_call_expression(second_identifier),
-                constant_expression(float(self.first_weight)),
+                FrozenProgramCallExpression(first_identifier),
+                FrozenProgramCallExpression(second_identifier),
+                ConstantExpression(float(self.first_weight)),
             ),
         )
-        program = domain_specific_language_predictor_program(expression=expression)
+        program = DomainSpecificLanguagePredictorProgram(expression=expression)
         signature = f"mixture_recall:{first_identifier}:{second_identifier}:{self.first_weight}"
-        return transformer_candidate(
+        return TransformerCandidate(
             predictor_program=program,
             transformer_description_length_bits=self.description_length_bits,
             candidate_signature=signature,
@@ -203,17 +203,17 @@ class mixture_of_recalled_programs_transformer_program:
 
 
 @dataclass(frozen=True)
-class digit_cycle_step_edit_transformer_program:
+class DigitCycleStepEditTransformerProgram:
     step_change: int
     description_length_bits: int = 3
 
     def generate_candidate(
         self,
-        memory_state: memory_state_protocol,
-        frozen_store: frozen_program_store_protocol,
-        primitive_library: primitive_library,
-        memory_mechanism: memory_mechanism,
-    ) -> transformer_candidate | None:
+        memory_state: MemoryStateProtocol,
+        frozen_store: FrozenProgramStoreProtocol,
+        primitive_library: PrimitiveLibrary,
+        memory_mechanism: MemoryMechanism,
+    ) -> TransformerCandidate | None:
         # Attempt to find a recalled digit-cycle predictor and patch its step size.
         recall_key = memory_mechanism.build_recall_key(memory_state)
         recalled_identifiers = memory_mechanism.recall_program_identifiers(
@@ -237,13 +237,13 @@ class digit_cycle_step_edit_transformer_program:
                     continue
                 current_step_size = int(getattr(argument_expression, "value"))
                 new_step_size = (current_step_size + int(self.step_change)) % 10
-                new_expression = primitive_call_expression(
+                new_expression = PrimitiveCallExpression(
                     "digit_cycle_character_distribution",
-                    (constant_expression(int(new_step_size)),),
+                    (ConstantExpression(int(new_step_size)),),
                 )
-                new_program = domain_specific_language_predictor_program(expression=new_expression)
+                new_program = DomainSpecificLanguagePredictorProgram(expression=new_expression)
                 signature = f"digit_cycle_edit:{identifier}:{current_step_size}->{new_step_size}"
-                return transformer_candidate(
+                return TransformerCandidate(
                     predictor_program=new_program,
                     transformer_description_length_bits=self.description_length_bits,
                     candidate_signature=signature,

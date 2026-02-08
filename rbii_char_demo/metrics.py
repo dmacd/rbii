@@ -6,12 +6,12 @@ from typing import Any
 import math
 import numpy as numpy
 
-from character_vocabulary import character_vocabulary
-from test_scenarios import scenario_description, episode_description
+from character_vocabulary import CharacterVocabulary
+from test_scenarios import ScenarioDescription, EpisodeDescription
 
 
 @dataclass(frozen=True)
-class reacquisition_measurement:
+class ReacquisitionMeasurement:
     task_name: str
     return_index: int
     episode_start_index: int
@@ -21,8 +21,8 @@ class reacquisition_measurement:
     reacquisition_excess_loss_bits: float
 
 
-class character_bigram_reference_model:
-    def __init__(self, character_vocabulary: character_vocabulary, training_indices: list[int], smoothing_alpha: float = 0.5) -> None:
+class CharacterBigramReferenceModel:
+    def __init__(self, character_vocabulary: CharacterVocabulary, training_indices: list[int], smoothing_alpha: float = 0.5) -> None:
         self.character_vocabulary = character_vocabulary
         self.smoothing_alpha = float(smoothing_alpha)
         vocabulary_size = character_vocabulary.size
@@ -49,8 +49,8 @@ class character_bigram_reference_model:
 
 
 def compute_reference_loss_bits_for_scenario(
-    scenario: scenario_description,
-    character_vocabulary: character_vocabulary,
+    scenario: ScenarioDescription,
+    character_vocabulary: CharacterVocabulary,
 ) -> list[float]:
     # Train one bigram model per task name using all text belonging to that task in the scenario.
     task_name_to_training_text: dict[str, str] = {}
@@ -58,10 +58,10 @@ def compute_reference_loss_bits_for_scenario(
         episode_text = scenario.stream_text[episode.start_index : episode.end_index]
         task_name_to_training_text[episode.task_name] = task_name_to_training_text.get(episode.task_name, "") + episode_text
 
-    task_name_to_model: dict[str, character_bigram_reference_model] = {}
+    task_name_to_model: dict[str, CharacterBigramReferenceModel] = {}
     for task_name, training_text in task_name_to_training_text.items():
         training_indices = character_vocabulary.encode_text(training_text)
-        task_name_to_model[task_name] = character_bigram_reference_model(character_vocabulary, training_indices)
+        task_name_to_model[task_name] = CharacterBigramReferenceModel(character_vocabulary, training_indices)
 
     # Compute reference loss aligned with the global stream.
     reference_loss_bits: list[float] = [0.0 for _ in range(len(scenario.stream_text))]
@@ -102,19 +102,19 @@ def compute_cumulative_compression_gain_bits(
 
 
 def compute_reacquisition_measurements(
-    scenario: scenario_description,
+    scenario: ScenarioDescription,
     per_step_algorithm_loss_bits: list[float],
     per_step_reference_loss_bits: list[float],
     tolerance_bits_per_character: float,
-) -> list[reacquisition_measurement]:
+) -> list[ReacquisitionMeasurement]:
     if len(per_step_algorithm_loss_bits) != len(per_step_reference_loss_bits):
         raise ValueError("Algorithm and reference loss arrays must have the same length.")
 
-    task_name_to_episodes: dict[str, list[episode_description]] = {}
+    task_name_to_episodes: dict[str, list[EpisodeDescription]] = {}
     for episode in scenario.episodes:
         task_name_to_episodes.setdefault(episode.task_name, []).append(episode)
 
-    measurements: list[reacquisition_measurement] = []
+    measurements: list[ReacquisitionMeasurement] = []
     for task_name, episodes in task_name_to_episodes.items():
         if len(episodes) < 2:
             continue
@@ -139,7 +139,7 @@ def compute_reacquisition_measurements(
                     break
 
             measurements.append(
-                reacquisition_measurement(
+                ReacquisitionMeasurement(
                     task_name=task_name,
                     return_index=int(return_index),
                     episode_start_index=int(episode.start_index),

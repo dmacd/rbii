@@ -5,45 +5,45 @@ from typing import Protocol
 
 import numpy as numpy
 
-from character_vocabulary import character_vocabulary
-from domain_specific_language import prediction_features
+from character_vocabulary import CharacterVocabulary
+from domain_specific_language import PredictionFeatures
 
 
-class memory_mechanism(Protocol):
-    def initialize(self, character_vocabulary: character_vocabulary) -> "memory_state_protocol": ...
+class MemoryMechanism(Protocol):
+    def initialize(self, character_vocabulary: CharacterVocabulary) -> "MemoryStateProtocol": ...
 
-    def update(self, memory_state: "memory_state_protocol", observed_character_index: int) -> None: ...
+    def update(self, memory_state: "MemoryStateProtocol", observed_character_index: int) -> None: ...
 
     def build_prediction_features(
         self,
-        memory_state: "memory_state_protocol",
+        memory_state: "MemoryStateProtocol",
         probability_floor: float,
-    ) -> prediction_features: ...
+    ) -> PredictionFeatures: ...
 
-    def build_recall_key(self, memory_state: "memory_state_protocol") -> tuple[int, ...]: ...
+    def build_recall_key(self, memory_state: "MemoryStateProtocol") -> tuple[int, ...]: ...
 
     def record_frozen_program_identifier(
         self,
-        memory_state: "memory_state_protocol",
+        memory_state: "MemoryStateProtocol",
         recall_key: tuple[int, ...],
         frozen_program_identifier: str,
     ) -> None: ...
 
     def recall_program_identifiers(
         self,
-        memory_state: "memory_state_protocol",
+        memory_state: "MemoryStateProtocol",
         recall_key: tuple[int, ...],
         maximum_number: int,
     ) -> list[str]: ...
 
 
-class memory_state_protocol(Protocol):
-    character_vocabulary: character_vocabulary
+class MemoryStateProtocol(Protocol):
+    character_vocabulary: CharacterVocabulary
 
 
 @dataclass
-class character_history_memory_state:
-    character_vocabulary: character_vocabulary
+class CharacterHistoryMemoryState:
+    character_vocabulary: CharacterVocabulary
     maximum_context_length: int
     recall_key_length: int
     smoothing_alpha: float
@@ -56,7 +56,7 @@ class character_history_memory_state:
     time_step_index: int = 0
 
 
-class character_history_memory_mechanism:
+class CharacterHistoryMemoryMechanism:
     def __init__(
         self,
         maximum_context_length: int = 16,
@@ -74,12 +74,12 @@ class character_history_memory_mechanism:
         self.smoothing_alpha = float(smoothing_alpha)
         self.maximum_program_identifiers_per_key = int(maximum_program_identifiers_per_key)
 
-    def initialize(self, character_vocabulary: character_vocabulary) -> character_history_memory_state:
+    def initialize(self, character_vocabulary: CharacterVocabulary) -> CharacterHistoryMemoryState:
         vocabulary_size = character_vocabulary.size
         bigram_counts = numpy.zeros((vocabulary_size, vocabulary_size), dtype=numpy.int64)
         trigram_counts: dict[tuple[int, int], numpy.ndarray] = {}
         recall_index: dict[tuple[int, ...], list[str]] = {}
-        return character_history_memory_state(
+        return CharacterHistoryMemoryState(
             character_vocabulary=character_vocabulary,
             maximum_context_length=self.maximum_context_length,
             recall_key_length=self.recall_key_length,
@@ -90,7 +90,7 @@ class character_history_memory_mechanism:
             recall_index=recall_index,
         )
 
-    def update(self, memory_state: character_history_memory_state, observed_character_index: int) -> None:
+    def update(self, memory_state: CharacterHistoryMemoryState, observed_character_index: int) -> None:
         # Update bigram and trigram counts based on the most recent context.
         if len(memory_state.recent_character_indices) >= 1:
             previous_character_index = memory_state.recent_character_indices[-1]
@@ -123,9 +123,9 @@ class character_history_memory_mechanism:
 
     def build_prediction_features(
         self,
-        memory_state: character_history_memory_state,
+        memory_state: CharacterHistoryMemoryState,
         probability_floor: float,
-    ) -> prediction_features:
+    ) -> PredictionFeatures:
         vocabulary_size = memory_state.character_vocabulary.size
         uniform_distribution = numpy.ones(vocabulary_size, dtype=numpy.float64) / float(vocabulary_size)
 
@@ -157,13 +157,13 @@ class character_history_memory_mechanism:
         bigram_distribution = bigram_distribution / float(bigram_distribution.sum())
         trigram_distribution = trigram_distribution / float(trigram_distribution.sum())
 
-        return prediction_features(
+        return PredictionFeatures(
             recent_character_indices=tuple(memory_state.recent_character_indices),
             bigram_probability_distribution=bigram_distribution,
             trigram_probability_distribution=trigram_distribution,
         )
 
-    def build_recall_key(self, memory_state: character_history_memory_state) -> tuple[int, ...]:
+    def build_recall_key(self, memory_state: CharacterHistoryMemoryState) -> tuple[int, ...]:
         # Key is the most recent `recall_key_length` indices.
         recent = memory_state.recent_character_indices
         if len(recent) >= memory_state.recall_key_length:
@@ -174,7 +174,7 @@ class character_history_memory_mechanism:
 
     def record_frozen_program_identifier(
         self,
-        memory_state: character_history_memory_state,
+        memory_state: CharacterHistoryMemoryState,
         recall_key: tuple[int, ...],
         frozen_program_identifier: str,
     ) -> None:
@@ -185,7 +185,7 @@ class character_history_memory_mechanism:
 
     def recall_program_identifiers(
         self,
-        memory_state: character_history_memory_state,
+        memory_state: CharacterHistoryMemoryState,
         recall_key: tuple[int, ...],
         maximum_number: int,
     ) -> list[str]:

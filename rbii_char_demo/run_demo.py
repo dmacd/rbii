@@ -3,19 +3,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from character_vocabulary import character_vocabulary
-from configuration import resource_bounded_incremental_induction_configuration
-from freezing_policies import incumbent_run_length_freeze_policy
-from memory_mechanisms import character_history_memory_mechanism
+from character_vocabulary import CharacterVocabulary
+from configuration import ResourceBoundedIncrementalInductionConfiguration
+from freezing_policies import IncumbentRunLengthFreezePolicy
+from memory_mechanisms import CharacterHistoryMemoryMechanism
 from metrics import (
     compute_cumulative_sum,
     compute_cumulative_compression_gain_bits,
     compute_reacquisition_measurements,
     compute_reference_loss_bits_for_scenario,
 )
-from newborn_weight_policies import prior_consistent_newborn_weight_assignment_policy
+from newborn_weight_policies import PriorConsistentNewbornWeightAssignmentPolicy
 from primitive_library import create_default_primitive_library
-from resource_bounded_incremental_induction import resource_bounded_incremental_induction_system
+from resource_bounded_incremental_induction import ResourceBoundedIncrementalInductionSystem
 from test_scenarios import (
     build_scenario_a_context_switching,
     build_scenario_b_compositional_curriculum,
@@ -29,21 +29,21 @@ from plotting import (
     plot_reacquisition_excess_loss,
 )
 from transformer_programs import (
-    bigram_predictor_transformer_program,
-    digit_cycle_predictor_transformer_program,
-    digit_cycle_step_edit_transformer_program,
-    mixture_of_recalled_programs_transformer_program,
-    recall_frozen_program_transformer_program,
-    trigram_predictor_transformer_program,
-    uniform_predictor_transformer_program,
+    BigramPredictorTransformerProgram,
+    DigitCyclePredictorTransformerProgram,
+    DigitCycleStepEditTransformerProgram,
+    MixtureOfRecalledProgramsTransformerProgram,
+    RecallFrozenProgramTransformerProgram,
+    TrigramPredictorTransformerProgram,
+    UniformPredictorTransformerProgram,
 )
 
 
 def run_scenario(scenario, outputs_directory: Path) -> None:
-    vocabulary = character_vocabulary.from_text(scenario.stream_text)
+    vocabulary = CharacterVocabulary.from_text(scenario.stream_text)
     character_indices = vocabulary.encode_text(scenario.stream_text)
 
-    configuration = resource_bounded_incremental_induction_configuration(
+    configuration = ResourceBoundedIncrementalInductionConfiguration(
         pool_capacity=8,
         exploration_transformer_executions_per_step=3,
         validation_window_length=256,
@@ -58,31 +58,31 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
     )
 
     primitive_library = create_default_primitive_library()
-    memory_mechanism = character_history_memory_mechanism(
+    memory_mechanism = CharacterHistoryMemoryMechanism(
         maximum_context_length=16,
         recall_key_length=4,
         smoothing_alpha=0.5,
         maximum_program_identifiers_per_key=8,
     )
-    freezing_policy = incumbent_run_length_freeze_policy(
+    freezing_policy = IncumbentRunLengthFreezePolicy(
         minimum_incumbent_run_length=256,
         minimum_average_gain_bits_per_character=0.1,
     )
-    newborn_weight_assignment_policy = prior_consistent_newborn_weight_assignment_policy()
+    newborn_weight_assignment_policy = PriorConsistentNewbornWeightAssignmentPolicy()
 
     transformers = [
-        uniform_predictor_transformer_program(),
-        bigram_predictor_transformer_program(),
-        trigram_predictor_transformer_program(),
-        recall_frozen_program_transformer_program(),
-        mixture_of_recalled_programs_transformer_program(),
-        digit_cycle_step_edit_transformer_program(step_change=1),
-        digit_cycle_step_edit_transformer_program(step_change=-1),
+        UniformPredictorTransformerProgram(),
+        BigramPredictorTransformerProgram(),
+        TrigramPredictorTransformerProgram(),
+        RecallFrozenProgramTransformerProgram(),
+        MixtureOfRecalledProgramsTransformerProgram(),
+        DigitCycleStepEditTransformerProgram(step_change=1),
+        DigitCycleStepEditTransformerProgram(step_change=-1),
     ]
     for step_size in range(1, 10):
-        transformers.append(digit_cycle_predictor_transformer_program(step_size=step_size))
+        transformers.append(DigitCyclePredictorTransformerProgram(step_size=step_size))
 
-    system = resource_bounded_incremental_induction_system(
+    system = ResourceBoundedIncrementalInductionSystem(
         configuration=configuration,
         primitive_library=primitive_library,
         transformer_programs=transformers,

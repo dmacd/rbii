@@ -1,9 +1,9 @@
 {
   "scenario_name": "scenario_c_rare_glimpses",
   "stream_length_characters": 16953,
-  "final_cumulative_algorithm_loss_bits": 37149.394843804395,
+  "final_cumulative_algorithm_loss_bits": 37149.07294859355,
   "final_cumulative_baseline_loss_bits": 92553.74423075929,
-  "final_cumulative_compression_gain_bits": 55404.34938695489,
+  "final_cumulative_compression_gain_bits": 55404.671282165735,
   "number_of_episodes": 17,
   "reacquisition_measurements": [
     {

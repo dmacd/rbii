@@ -6,7 +6,7 @@ from typing import Protocol
 import math
 
 
-class newborn_weight_assignment_policy(Protocol):
+class NewbornWeightAssignmentPolicy(Protocol):
     def compute_initial_log_weight_base_two(
         self,
         log_total_weight_base_two: float,
@@ -15,7 +15,7 @@ class newborn_weight_assignment_policy(Protocol):
 
 
 @dataclass(frozen=True)
-class prior_consistent_newborn_weight_assignment_policy:
+class PriorConsistentNewbornWeightAssignmentPolicy:
     def compute_initial_log_weight_base_two(
         self,
         log_total_weight_base_two: float,
@@ -26,7 +26,7 @@ class prior_consistent_newborn_weight_assignment_policy:
 
 
 @dataclass(frozen=True)
-class fixed_fraction_newborn_weight_assignment_policy:
+class FixedFractionNewbornWeightAssignmentPolicy:
     fraction_of_total_weight: float = 0.01
 
     def compute_initial_log_weight_base_two(
