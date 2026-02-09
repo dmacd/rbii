@@ -199,6 +199,19 @@ class ResourceBoundedIncrementalInductionSystem:
     with self._create_thread_pool_executor() as executor:
       for time_step_index, observed_character_index in enumerate(
           character_indices):
+
+        print(f"time_step_index: {time_step_index} ----------" )
+        # print(f"active pool: {active_pool}")
+        # print active pool predictors
+        print(
+          f"incumbent_signature: {incumbent_signature}, incumbent_run_length:"
+            f"{incumbent_run_length}")
+
+        for entry in active_pool:
+          print(f"  entry: {entry.predictor_signature}, log_weight: {entry.logarithmic_weight_base_two}")
+
+
+
         # ---- Build features for predictors (state at time t-1) ----
         current_prediction_features = self.memory_mechanism.build_prediction_features(
           memory_state=memory_state,
