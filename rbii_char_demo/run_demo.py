@@ -7,7 +7,6 @@ from pathlib import Path
 
 from character_vocabulary import CharacterVocabulary
 from configuration import ResourceBoundedIncrementalInductionConfiguration
-from freezing_policies import IncumbentRunLengthFreezePolicy
 from memory_mechanisms import CharacterHistoryMemoryMechanism
 from metrics import (
   compute_cumulative_sum,
@@ -15,7 +14,6 @@ from metrics import (
   compute_reacquisition_measurements,
   compute_reference_loss_bits_for_scenario,
 )
-from newborn_weight_policies import PriorConsistentNewbornWeightAssignmentPolicy
 from primitive_library import create_default_primitive_library
 from resource_bounded_incremental_induction import \
   ResourceBoundedIncrementalInduction
@@ -98,12 +96,6 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
     # smoothing_alpha=0.5,
     maximum_program_identifiers_per_key=8,
   )
-  freezing_policy = IncumbentRunLengthFreezePolicy(
-    minimum_incumbent_run_length=256,
-    minimum_average_gain_bits_per_character=0.1,
-  )
-  newborn_weight_assignment_policy = PriorConsistentNewbornWeightAssignmentPolicy()
-
   # transformers = [
   #   UniformPredictorTransformerProgram(),
   #   BigramPredictorTransformerProgram(),
@@ -123,8 +115,6 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
     primitive_library=primitive_library,
     # transformer_programs=transformers,
     memory_mechanism=memory_mechanism,
-    freezing_policy=freezing_policy,
-    newborn_weight_assignment_policy=newborn_weight_assignment_policy,
     # random_seed=0,
   )
   run_result = run_scenario_stream(
