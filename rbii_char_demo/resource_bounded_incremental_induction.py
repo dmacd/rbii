@@ -1,482 +1,687 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable
-
+import hashlib
 import math
-import random
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any, Protocol
 
-import numpy as numpy
+import numpy
 
-from character_vocabulary import CharacterVocabulary
 from configuration import ResourceBoundedIncrementalInductionConfiguration
-from domain_specific_language import (
-  DomainSpecificLanguageEvaluationContext,
-  PredictionFeatures,
-  PrimitiveCallExpression,
+from domain_specific_language import DomainSpecificLanguageEvaluationContext, \
+  PrimitiveCallExpression
+from memory_mechanisms import MemoryMechanism, \
+  character_history_memory_mechanism
+from predictor_programs import DomainSpecificLanguagePredictorProgram, \
+  PredictorProgram
+from primitive_library import PrimitiveLibrary, create_default_primitive_library
+from transformer_programs import (
+  EnumerativeTransformerSearchStrategy,
+  ProbabilisticProgramGrammar,
+  TransformerSearchStrategy,
+  create_default_probabilistic_program_grammar,
 )
-from freezing_policies import FreezingPolicy
-from memory_mechanisms import MemoryMechanism
-from newborn_weight_policies import NewbornWeightAssignmentPolicy
-from predictor_programs import DomainSpecificLanguagePredictorProgram
-from primitive_library import PrimitiveLibrary
-from transformer_programs import TransformerProgram, TransformerCandidate
+
+
+class FreezingPolicy(Protocol):
+  def should_freeze(
+      self,
+      time_step_index: int,
+      incumbent_program_identifier: str,
+      incumbent_run_length: int,
+      validation_buffer_length: int,
+  ) -> bool: ...
+
+
+class NewbornWeightAssignmentPolicy(Protocol):
+  def compute_newborn_log_weight_base_two(
+      self,
+      description_length_bits: float,
+      current_log_total_weight_base_two: float,
+  ) -> float: ...
+
+
+class AlwaysFreezeIncumbentPolicy:
+  def should_freeze(
+      self,
+      time_step_index: int,
+      incumbent_program_identifier: str,
+      incumbent_run_length: int,
+      validation_buffer_length: int,
+  ) -> bool:
+    del time_step_index
+    del incumbent_program_identifier
+    del incumbent_run_length
+    del validation_buffer_length
+    return True
+
+
+class PriorConsistentNewbornWeightAssignmentPolicy:
+  """Implements Assumption 3-style weight injection: W_new = 2^{-k} * Z."""
+
+  def compute_newborn_log_weight_base_two(
+      self,
+      description_length_bits: float,
+      current_log_total_weight_base_two: float,
+  ) -> float:
+    return float(current_log_total_weight_base_two) - float(
+      description_length_bits)
+
+
+@dataclass(frozen=True)
+class ValidationBufferEntry:
+  evaluation_features: Any
+  observed_character_index: int
+  recall_key: str
 
 
 @dataclass
-class FrozenProgramRecord:
+class ActivePredictorEntry:
   program_identifier: str
-  predictor_program: DomainSpecificLanguagePredictorProgram
-  transformer_description_length_bits: int
-  times_recalled: int = 0
-  times_frozen: int = 1
+  predictor_program: PredictorProgram
+  description_length_bits: float
+  log_weight_base_two: float
+
+
+@dataclass
+class CandidatePredictorEntry:
+  program_identifier: str
+  predictor_program: PredictorProgram
+  description_length_bits: float
+  minimum_description_length_score_bits: float
 
 
 class FrozenProgramStore:
   def __init__(self) -> None:
-    self._records_by_identifier: dict[str, FrozenProgramRecord] = {}
-    self._program_identifiers_in_insertion_order: list[str] = []
-    self._next_identifier_index: int = 0
+    self._lock = threading.Lock()
+    self._programs_by_identifier: dict[str, PredictorProgram] = {}
 
-  def add_program(
-      self,
-      predictor_program: DomainSpecificLanguagePredictorProgram,
-      transformer_description_length_bits: int,
-  ) -> str:
-    program_identifier = f"frozen_program_{self._next_identifier_index}"
-    self._next_identifier_index += 1
-    record = FrozenProgramRecord(
-      program_identifier=program_identifier,
-      predictor_program=predictor_program,
-      transformer_description_length_bits=int(
-        transformer_description_length_bits),
-    )
-    self._records_by_identifier[program_identifier] = record
-    self._program_identifiers_in_insertion_order.append(program_identifier)
-    return program_identifier
+  def add_program(self, program_identifier: str,
+                  predictor_program: PredictorProgram) -> None:
+    with self._lock:
+      self._programs_by_identifier[str(program_identifier)] = predictor_program
 
-  def get_program(self,
-                  program_identifier: str) -> DomainSpecificLanguagePredictorProgram:
-    return self._records_by_identifier[program_identifier].predictor_program
+  def has_program(self, program_identifier: str) -> bool:
+    with self._lock:
+      return str(program_identifier) in self._programs_by_identifier
+
+  def get_program(self, program_identifier: str) -> PredictorProgram:
+    with self._lock:
+      return self._programs_by_identifier[str(program_identifier)]
 
   def list_program_identifiers(self) -> list[str]:
-    return list(self._program_identifiers_in_insertion_order)
-
-  def record_recall(self, program_identifier: str) -> None:
-    if program_identifier in self._records_by_identifier:
-      self._records_by_identifier[program_identifier].times_recalled += 1
-
-  @property
-  def size(self) -> int:
-    return len(self._program_identifiers_in_insertion_order)
+    with self._lock:
+      return list(self._programs_by_identifier.keys())
 
 
-@dataclass
-class ActivePoolEntry:
-  predictor_program: DomainSpecificLanguagePredictorProgram
-  predictor_signature: str
-  origin_transformer_description_length_bits: int
-  logarithmic_weight_base_two: float
-  instance_identifier: str
+class ResourceBoundedIncrementalInduction:
+  """Resource Bounded Incremental Induction (RBII) loop for character prediction.
 
+  Key implementation points:
+      - Active pool is finite and tracked by exp-weights (log weights).
+      - Exploration proposes DSL transformer expressions via a DreamCoder-style enumerator.
+      - Candidates are validated on a fixed recent window via MDL: loss + description_length_bits.
+      - Frozen store is indexed by the memory mechanism under a recall key (state-indexed recall).
+  """
 
-@dataclass(frozen=True)
-class ValidationExample:
-  prediction_features: PredictionFeatures
-  observed_character_index: int
-
-
-@dataclass
-class ResourceBoundedIncrementalInductionRunResult:
-  character_vocabulary: CharacterVocabulary
-  per_step_algorithm_loss_bits: list[float]
-  per_step_baseline_loss_bits: list[float]
-  per_step_incumbent_signature: list[str]
-  active_pool_size_over_time: list[int]
-  frozen_store_size_over_time: list[int]
-
-
-def _logarithmic_sum_base_two(
-    logarithmic_values_base_two: Iterable[float]) -> float:
-  values = list(logarithmic_values_base_two)
-  if len(values) == 0:
-    return -math.inf
-  maximum_value = max(values)
-  if not math.isfinite(maximum_value):
-    return -math.inf
-  sum_value = 0.0
-  for value in values:
-    sum_value += 2.0 ** (value - maximum_value)
-  return maximum_value + math.log2(sum_value)
-
-
-def _normalize_logarithmic_weights_base_two(
-    logarithmic_weights_base_two: list[float]) -> list[float]:
-  logarithmic_total_weight_base_two = _logarithmic_sum_base_two(
-    logarithmic_weights_base_two)
-  if not math.isfinite(logarithmic_total_weight_base_two):
-    raise ValueError("Cannot normalize weights: total weight is non-finite.")
-  return [value - logarithmic_total_weight_base_two for value in
-          logarithmic_weights_base_two]
-
-
-class ResourceBoundedIncrementalInductionSystem:
   def __init__(
       self,
-      configuration: ResourceBoundedIncrementalInductionConfiguration,
-      primitive_library: PrimitiveLibrary,
-      transformer_programs: list[TransformerProgram],
-      memory_mechanism: MemoryMechanism,
-      freezing_policy: FreezingPolicy,
-      newborn_weight_assignment_policy: NewbornWeightAssignmentPolicy,
-      random_seed: int = 0,
+      character_vocabulary: Any,
+      configuration: ResourceBoundedIncrementalInductionConfiguration | None = None,
+      memory_mechanism: MemoryMechanism | None = None,
+      primitive_library: PrimitiveLibrary | None = None,
+      transformer_search_strategy: TransformerSearchStrategy | None = None,
+      freezing_policy: FreezingPolicy | None = None,
+      newborn_weight_assignment_policy: NewbornWeightAssignmentPolicy | None = None,
   ) -> None:
-    self.configuration = configuration
-    self.primitive_library = primitive_library
-    self.transformer_programs = transformer_programs
-    self.memory_mechanism = memory_mechanism
-    self.freezing_policy = freezing_policy
-    self.newborn_weight_assignment_policy = newborn_weight_assignment_policy
-    self.random_generator = random.Random(int(random_seed))
+    self.character_vocabulary = character_vocabulary
+    self.configuration = configuration or ResourceBoundedIncrementalInductionConfiguration()
 
-    transformer_weights = []
-    for transformer in transformer_programs:
-      transformer_weights.append(
-        2.0 ** (-float(transformer.description_length_bits)))
-    total_transformer_weight = float(sum(transformer_weights))
-    self.transformer_sampling_probabilities = [weight / total_transformer_weight
-                                               for weight in
-                                               transformer_weights]
+    self.memory_mechanism = memory_mechanism or character_history_memory_mechanism(
+      maximum_context_length=16,
+      maximum_history_length=2048,
+      recall_key_length=4,
+      maximum_program_identifiers_per_key=8,
+    )
+    self.memory_state = self.memory_mechanism.initialize(
+      character_vocabulary=self.character_vocabulary)
 
-  def _sample_transformers_for_exploration(self) -> list[TransformerProgram]:
-    number_to_sample = int(
-      self.configuration.exploration_transformer_executions_per_step)
-    return self.random_generator.choices(
-      population=self.transformer_programs,
-      weights=self.transformer_sampling_probabilities,
-      k=number_to_sample,
+    self.primitive_library = primitive_library or create_default_primitive_library()
+
+    if transformer_search_strategy is None:
+      grammar = create_default_probabilistic_program_grammar(
+        primitive_library=self.primitive_library)
+      transformer_search_strategy = EnumerativeTransformerSearchStrategy(
+        grammar=grammar,
+        probability_budget_bits=float(
+          self.configuration.transformer_search_probability_budget_bits),
+        maximum_expression_depth=int(
+          self.configuration.transformer_search_maximum_expression_depth),
+      )
+    self.transformer_search_strategy = transformer_search_strategy
+
+    self.freezing_policy = freezing_policy or AlwaysFreezeIncumbentPolicy()
+    self.newborn_weight_assignment_policy = newborn_weight_assignment_policy or PriorConsistentNewbornWeightAssignmentPolicy()
+
+    self.frozen_store = FrozenProgramStore()
+
+    self.active_pool: list[ActivePredictorEntry] = []
+    self.candidate_buffer: list[CandidatePredictorEntry] = []
+    self.validation_buffer: list[ValidationBufferEntry] = []
+
+    self.time_step_index = 0
+    self.incumbent_program_identifier = ""
+    self.incumbent_run_length = 0
+
+    self._thread_pool_executor = ThreadPoolExecutor(
+      max_workers=self.configuration.maximum_worker_threads)
+    self._lock = threading.Lock()
+
+    self._initialize_with_uniform_predictor()
+
+    self.last_mixture_distribution: numpy.ndarray | None = None
+    self.last_loss_bits: float | None = None
+
+  def _initialize_with_uniform_predictor(self) -> None:
+    uniform_expression = PrimitiveCallExpression(
+      primitive_name="uniform_character_distribution", argument_expressions=())
+    uniform_predictor = DomainSpecificLanguagePredictorProgram(
+      expression=uniform_expression)
+    program_identifier = self._compute_program_identifier(uniform_expression)
+    self.active_pool.append(
+      ActivePredictorEntry(
+        program_identifier=program_identifier,
+        predictor_program=uniform_predictor,
+        description_length_bits=0.0,
+        log_weight_base_two=0.0,
+      )
+    )
+    self.incumbent_program_identifier = program_identifier
+    self.incumbent_run_length = 0
+
+  def _compute_program_identifier(self, expression: Any) -> str:
+    encoded = repr(expression).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+  def step(self, observed_character_index: int) -> numpy.ndarray:
+    """Processes one observation.
+
+    Returns:
+        The mixture distribution predicted *before* seeing the observation.
+    """
+
+    observed_index = int(observed_character_index)
+
+    # Build evaluation context for the current state (predicting x_t given m_{t-1}).
+    prediction_features = self.memory_mechanism.build_prediction_features(
+      memory_state=self.memory_state,
+      probability_floor=float(self.configuration.probability_floor),
+    )
+    recall_key = self.memory_mechanism.build_recall_key(
+      memory_state=self.memory_state)
+    recalled_program_identifiers = tuple(
+      self.memory_mechanism.recall_program_identifiers(
+        memory_state=self.memory_state,
+        recall_key=recall_key,
+        maximum_number_of_program_identifiers=int(
+          self.configuration.maximum_recalled_programs_per_step),
+      )
     )
 
-  def _create_thread_pool_executor(self) -> ThreadPoolExecutor:
-    return ThreadPoolExecutor(
-      max_workers=self.configuration.maximum_worker_threads)
+    evaluation_context = DomainSpecificLanguageEvaluationContext(
+      character_vocabulary=self.character_vocabulary,
+      prediction_features=prediction_features,
+      recalled_frozen_program_identifiers=recalled_program_identifiers,
+      probability_floor=float(self.configuration.probability_floor),
+    )
 
-  def run(self, character_indices: list[int],
-          character_vocabulary: CharacterVocabulary) -> ResourceBoundedIncrementalInductionRunResult:
-    frozen_store = FrozenProgramStore()
-    memory_state = self.memory_mechanism.initialize(character_vocabulary)
+    # Predict with all active predictors (parallelizable in no-GIL python).
+    predictor_distributions = self._predict_active_pool_distributions(
+      evaluation_context=evaluation_context)
 
-    initial_expression = PrimitiveCallExpression(
-      "uniform_character_distribution", ())
-    initial_program = DomainSpecificLanguagePredictorProgram(
-      expression=initial_expression)
+    mixture_distribution = self._compute_mixture_distribution(
+      predictor_distributions=predictor_distributions)
+    mixture_distribution = self._apply_probability_floor(mixture_distribution)
 
-    active_pool: list[ActivePoolEntry] = [
-      ActivePoolEntry(
-        predictor_program=initial_program,
-        predictor_signature=repr(initial_program.expression),
-        origin_transformer_description_length_bits=2,
-        logarithmic_weight_base_two=0.0,
-        instance_identifier="active_instance_0",
+    self.last_mixture_distribution = mixture_distribution
+    self.last_loss_bits = self._negative_log_probability_bits(
+      mixture_distribution, observed_index)
+
+    # Update weights.
+    self._update_active_pool_weights(
+      predictor_distributions=predictor_distributions,
+      observed_character_index=observed_index,
+    )
+
+    # Update state with the observation.
+    self.memory_mechanism.update(memory_state=self.memory_state,
+                                 observed_character_index=observed_index)
+
+    # Append to validation buffer (store features from m_{t-1} with the observed x_t).
+    self.validation_buffer.append(
+      ValidationBufferEntry(
+        evaluation_features=prediction_features,
+        observed_character_index=observed_index,
+        recall_key=str(recall_key),
       )
+    )
+    if len(self.validation_buffer) > int(
+        self.configuration.validation_window_length):
+      self.validation_buffer = self.validation_buffer[
+        -int(self.configuration.validation_window_length):]
+
+    self.time_step_index += 1
+
+    # Periodic candidate re-validation.
+    if int(self.configuration.candidate_validation_interval) > 0 and (
+        self.time_step_index % int(
+      self.configuration.candidate_validation_interval) == 0
+    ):
+      self._revalidate_candidate_buffer()
+
+    # Explore: propose and validate new transformer expressions.
+    self._explore_and_maybe_insert_candidates(
+      evaluation_context=evaluation_context)
+
+    # Freeze: store the incumbent under the current recall key (state-indexed recall).
+    if int(self.configuration.freeze_evaluation_interval) > 0 and (
+        self.time_step_index % int(
+      self.configuration.freeze_evaluation_interval) == 0
+    ):
+      self._maybe_freeze_incumbent()
+
+    return mixture_distribution
+
+  def _predict_active_pool_distributions(
+      self, evaluation_context: DomainSpecificLanguageEvaluationContext
+  ) -> list[numpy.ndarray]:
+    def compute_distribution(entry: ActivePredictorEntry) -> numpy.ndarray:
+      try:
+        distribution = entry.predictor_program.predict_character_distribution(
+          evaluation_context=evaluation_context,
+          primitive_library=self.primitive_library,
+          frozen_store=self.frozen_store,
+        )
+        return numpy.asarray(distribution, dtype=numpy.float64)
+      except Exception:
+        vocabulary_size = int(self.character_vocabulary.size)
+        return numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
+          vocabulary_size)
+
+    return list(
+      self._thread_pool_executor.map(compute_distribution, self.active_pool))
+
+  def _compute_mixture_distribution(self, predictor_distributions: list[
+    numpy.ndarray]) -> numpy.ndarray:
+    vocabulary_size = int(self.character_vocabulary.size)
+    if len(predictor_distributions) == 0:
+      return numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
+        vocabulary_size)
+
+    log_weights = numpy.array(
+      [float(entry.log_weight_base_two) for entry in self.active_pool],
+      dtype=numpy.float64)
+    maximum_log_weight = float(log_weights.max())
+    stabilized_weights = numpy.power(2.0, log_weights - maximum_log_weight)
+    total_weight = float(stabilized_weights.sum())
+    if not numpy.isfinite(total_weight) or total_weight <= 0.0:
+      stabilized_weights = numpy.ones_like(stabilized_weights,
+                                           dtype=numpy.float64)
+      total_weight = float(stabilized_weights.sum())
+
+    normalized_weights = stabilized_weights / total_weight
+
+    mixture = numpy.zeros(vocabulary_size, dtype=numpy.float64)
+    for weight, distribution in zip(normalized_weights,
+                                    predictor_distributions):
+      distribution_array = numpy.asarray(distribution, dtype=numpy.float64)
+      if distribution_array.shape[0] != vocabulary_size:
+        continue
+      mixture += float(weight) * distribution_array
+
+    total = float(mixture.sum())
+    if not numpy.isfinite(total) or total <= 0.0:
+      return numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
+        vocabulary_size)
+    return mixture / total
+
+  def _apply_probability_floor(self,
+                               distribution: numpy.ndarray) -> numpy.ndarray:
+    vocabulary_size = int(self.character_vocabulary.size)
+    probability_floor = float(self.configuration.probability_floor)
+    distribution_array = numpy.asarray(distribution, dtype=numpy.float64)
+    if distribution_array.shape[0] != vocabulary_size:
+      distribution_array = numpy.ones(vocabulary_size,
+                                      dtype=numpy.float64) / float(
+        vocabulary_size)
+
+    if probability_floor <= 0.0:
+      total = float(distribution_array.sum())
+      if total > 0.0:
+        return distribution_array / total
+      return numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
+        vocabulary_size)
+
+    floored = numpy.maximum(distribution_array, probability_floor)
+    total = float(floored.sum())
+    if total <= 0.0 or not numpy.isfinite(total):
+      return numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
+        vocabulary_size)
+    return floored / total
+
+  def _negative_log_probability_bits(self, distribution: numpy.ndarray,
+                                     observed_character_index: int) -> float:
+    vocabulary_size = int(self.character_vocabulary.size)
+    index = int(observed_character_index)
+    if index < 0 or index >= vocabulary_size:
+      return float(math.log2(vocabulary_size))
+
+    probability_value = float(distribution[index])
+    probability_floor = float(self.configuration.probability_floor)
+    probability_value = max(probability_value,
+                            probability_floor if probability_floor > 0.0 else 1e-12)
+    return float(-math.log2(probability_value))
+
+  def _update_active_pool_weights(
+      self,
+      predictor_distributions: list[numpy.ndarray],
+      observed_character_index: int,
+  ) -> None:
+    index = int(observed_character_index)
+    vocabulary_size = int(self.character_vocabulary.size)
+    probability_floor = float(self.configuration.probability_floor)
+    probability_floor = probability_floor if probability_floor > 0.0 else 1e-12
+
+    for entry, distribution in zip(self.active_pool, predictor_distributions):
+      if index < 0 or index >= vocabulary_size:
+        probability_value = 1.0 / float(vocabulary_size)
+      else:
+        probability_value = float(distribution[index]) if float(
+          distribution[index]) > 0.0 else probability_floor
+        probability_value = max(probability_value, probability_floor)
+      entry.log_weight_base_two += float(math.log2(probability_value))
+
+    # Re-center weights occasionally to avoid drift.
+    log_weights = [float(entry.log_weight_base_two) for entry in
+                   self.active_pool]
+    if len(log_weights) > 0:
+      maximum_log_weight = max(log_weights)
+      for entry in self.active_pool:
+        entry.log_weight_base_two -= maximum_log_weight
+
+  def _compute_current_log_total_weight_base_two(self) -> float:
+    log_weights = numpy.array(
+      [float(entry.log_weight_base_two) for entry in self.active_pool],
+      dtype=numpy.float64)
+    maximum_log_weight = float(log_weights.max())
+    stabilized_weights = numpy.power(2.0, log_weights - maximum_log_weight)
+    total_weight = float(stabilized_weights.sum())
+    if not numpy.isfinite(total_weight) or total_weight <= 0.0:
+      return 0.0
+    return float(math.log2(total_weight)) + maximum_log_weight
+
+  def _explore_and_maybe_insert_candidates(self,
+                                           evaluation_context: DomainSpecificLanguageEvaluationContext) -> None:
+    maximum_number_of_transformers = int(
+      self.configuration.exploration_transformer_executions_per_step)
+    if maximum_number_of_transformers <= 0:
+      return
+
+    candidates = self.transformer_search_strategy.propose_transformer_expressions(
+      evaluation_context=evaluation_context,
+      maximum_number_of_expressions=maximum_number_of_transformers,
+    )
+
+    for candidate in candidates:
+      expression = candidate.transformer_expression
+      program_identifier = self._compute_program_identifier(expression)
+
+      if any(entry.program_identifier == program_identifier for entry in
+             self.active_pool):
+        continue
+      if any(entry.program_identifier == program_identifier for entry in
+             self.candidate_buffer):
+        continue
+
+      predictor_program = DomainSpecificLanguagePredictorProgram(
+        expression=expression)
+      minimum_description_length_score_bits = self._score_candidate_minimum_description_length(
+        predictor_program=predictor_program,
+        description_length_bits=float(candidate.description_length_bits),
+      )
+
+      self.candidate_buffer.append(
+        CandidatePredictorEntry(
+          program_identifier=program_identifier,
+          predictor_program=predictor_program,
+          description_length_bits=float(candidate.description_length_bits),
+          minimum_description_length_score_bits=float(
+            minimum_description_length_score_bits),
+        )
+      )
+
+    self._trim_candidate_buffer()
+    self._insert_detectable_candidates()
+
+  def _score_candidate_minimum_description_length(
+      self,
+      predictor_program: PredictorProgram,
+      description_length_bits: float,
+  ) -> float:
+    window_loss_bits = self._compute_validation_window_loss_bits(
+      predictor_program=predictor_program)
+
+    vocabulary_size = int(self.character_vocabulary.size)
+    uniform_loss_bits_per_character = float(math.log2(vocabulary_size))
+    baseline_loss_bits = float(
+      len(self.validation_buffer)) * uniform_loss_bits_per_character
+
+    return float(window_loss_bits) + float(description_length_bits)
+
+  def _compute_validation_window_loss_bits(self,
+                                           predictor_program: PredictorProgram) -> float:
+    if len(self.validation_buffer) == 0:
+      return 0.0
+
+    vocabulary_size = int(self.character_vocabulary.size)
+
+    recalled_program_identifiers_by_key: dict[str, tuple[str, ...]] = {}
+    for entry in self.validation_buffer:
+      if entry.recall_key in recalled_program_identifiers_by_key:
+        continue
+      recalled_program_identifiers_by_key[entry.recall_key] = tuple(
+        self.memory_mechanism.recall_program_identifiers(
+          memory_state=self.memory_state,
+          recall_key=entry.recall_key,
+          maximum_number_of_program_identifiers=int(
+            self.configuration.maximum_recalled_programs_per_step),
+        )
+      )
+
+    total_loss_bits = 0.0
+    for entry in self.validation_buffer:
+      recalled_program_identifiers = recalled_program_identifiers_by_key.get(
+        entry.recall_key, ())
+      evaluation_context = DomainSpecificLanguageEvaluationContext(
+        character_vocabulary=self.character_vocabulary,
+        prediction_features=entry.evaluation_features,
+        recalled_frozen_program_identifiers=recalled_program_identifiers,
+        probability_floor=float(self.configuration.probability_floor),
+      )
+      try:
+        distribution = predictor_program.predict_character_distribution(
+          evaluation_context=evaluation_context,
+          primitive_library=self.primitive_library,
+          frozen_store=self.frozen_store,
+        )
+        distribution_array = numpy.asarray(distribution, dtype=numpy.float64)
+      except Exception:
+        distribution_array = numpy.ones(vocabulary_size,
+                                        dtype=numpy.float64) / float(
+          vocabulary_size)
+
+      distribution_array = self._apply_probability_floor(distribution_array)
+      total_loss_bits += self._negative_log_probability_bits(distribution_array,
+                                                             int(
+                                                               entry.observed_character_index))
+
+    return float(total_loss_bits)
+
+  def _trim_candidate_buffer(self) -> None:
+    capacity = int(self.configuration.candidate_buffer_capacity)
+    if capacity <= 0:
+      self.candidate_buffer = []
+      return
+    if len(self.candidate_buffer) <= capacity:
+      return
+    self.candidate_buffer.sort(
+      key=lambda entry: float(entry.minimum_description_length_score_bits))
+    self.candidate_buffer = self.candidate_buffer[:capacity]
+
+  def _insert_detectable_candidates(self) -> None:
+    if len(self.validation_buffer) == 0:
+      return
+
+    vocabulary_size = int(self.character_vocabulary.size)
+    uniform_loss_bits_per_character = float(math.log2(vocabulary_size))
+    baseline_loss_bits = float(
+      len(self.validation_buffer)) * uniform_loss_bits_per_character
+    slack_bits = float(self.configuration.detectability_slack_bits)
+
+    detectable_entries = [
+      entry
+      for entry in self.candidate_buffer
+      if float(entry.minimum_description_length_score_bits) <= float(
+        baseline_loss_bits - slack_bits)
     ]
-    next_active_instance_identifier_index = 1
 
-    validation_window: list[ValidationExample] = []
-    candidate_buffer_by_signature: dict[str, TransformerCandidate] = {}
+    if len(detectable_entries) == 0:
+      return
 
-    baseline_loss_per_character = math.log2(float(character_vocabulary.size))
-    incumbent_signature = active_pool[0].predictor_signature
-    incumbent_run_length = 0
+    detectable_entries.sort(
+      key=lambda entry: float(entry.minimum_description_length_score_bits))
+    for entry in detectable_entries:
+      self._insert_into_active_pool(entry)
 
-    per_step_algorithm_loss_bits: list[float] = []
-    per_step_baseline_loss_bits: list[float] = []
-    per_step_incumbent_signature: list[str] = []
-    active_pool_size_over_time: list[int] = []
-    frozen_store_size_over_time: list[int] = []
+    self.candidate_buffer = [
+      entry for entry in self.candidate_buffer if
+      entry.program_identifier not in {d.program_identifier for d in
+                                       detectable_entries}
+    ]
 
-    with self._create_thread_pool_executor() as executor:
-      for time_step_index, observed_character_index in enumerate(
-          character_indices):
+  def _insert_into_active_pool(self,
+                               candidate_entry: CandidatePredictorEntry) -> None:
+    current_log_total_weight_base_two = self._compute_current_log_total_weight_base_two()
+    newborn_log_weight_base_two = self.newborn_weight_assignment_policy.compute_newborn_log_weight_base_two(
+      description_length_bits=float(candidate_entry.description_length_bits),
+      current_log_total_weight_base_two=float(
+        current_log_total_weight_base_two),
+    )
 
-        print(f"time_step_index: {time_step_index} ----------" )
-        # print(f"active pool: {active_pool}")
-        # print active pool predictors
-        print(
-          f"incumbent_signature: {incumbent_signature}, incumbent_run_length:"
-            f"{incumbent_run_length}")
+    self.active_pool.append(
+      ActivePredictorEntry(
+        program_identifier=str(candidate_entry.program_identifier),
+        predictor_program=candidate_entry.predictor_program,
+        description_length_bits=float(candidate_entry.description_length_bits),
+        log_weight_base_two=float(newborn_log_weight_base_two),
+      )
+    )
 
-        for entry in active_pool:
-          print(f"  entry: {entry.predictor_signature}, log_weight: {entry.logarithmic_weight_base_two}")
+    self._enforce_pool_capacity()
+    self._update_incumbent_tracking()
 
+  def _enforce_pool_capacity(self) -> None:
+    capacity = int(self.configuration.pool_capacity)
+    if capacity <= 0:
+      capacity = 1
+    if len(self.active_pool) <= capacity:
+      return
 
+    self._update_incumbent_tracking()
+    incumbent_identifier = str(self.incumbent_program_identifier)
 
-        # ---- Build features for predictors (state at time t-1) ----
-        current_prediction_features = self.memory_mechanism.build_prediction_features(
-          memory_state=memory_state,
-          probability_floor=self.configuration.probability_floor,
-        )
-        evaluation_context = DomainSpecificLanguageEvaluationContext(
-          character_vocabulary=character_vocabulary,
-          prediction_features=current_prediction_features,
-          probability_floor=self.configuration.probability_floor,
-        )
+    self.active_pool.sort(key=lambda entry: float(entry.log_weight_base_two))
+    pruned: list[ActivePredictorEntry] = []
+    for entry in self.active_pool:
+      if len(pruned) >= len(self.active_pool) - capacity:
+        break
+      if entry.program_identifier == incumbent_identifier:
+        continue
+      pruned.append(entry)
 
-        # ---- Evaluate all active predictors in parallel ----
-        future_by_entry: dict[Any, ActivePoolEntry] = {}
-        for entry in active_pool:
-          future = executor.submit(
-            entry.predictor_program.predict_character_distribution,
-            evaluation_context,
-            self.primitive_library,
-            frozen_store,
-          )
-          future_by_entry[future] = entry
+    pruned_identifiers = {entry.program_identifier for entry in pruned}
+    self.active_pool = [entry for entry in self.active_pool if
+                        entry.program_identifier not in pruned_identifiers]
 
-        distributions_by_instance_identifier: dict[str, numpy.ndarray] = {}
-        for future in as_completed(list(future_by_entry.keys())):
-          entry = future_by_entry[future]
-          distribution = future.result()
-          distributions_by_instance_identifier[
-            entry.instance_identifier] = distribution
+  def _update_incumbent_tracking(self) -> None:
+    if len(self.active_pool) == 0:
+      self.incumbent_program_identifier = ""
+      self.incumbent_run_length = 0
+      return
 
-        # ---- Compute mixture prediction ----
-        logarithmic_weights = [entry.logarithmic_weight_base_two for entry in
-                               active_pool]
-        normalized_logarithmic_weights = _normalize_logarithmic_weights_base_two(
-          logarithmic_weights)
-        linear_weights = [2.0 ** value for value in
-                          normalized_logarithmic_weights]
+    best_entry = max(self.active_pool,
+                     key=lambda entry: float(entry.log_weight_base_two))
+    new_identifier = str(best_entry.program_identifier)
 
-        mixture = numpy.zeros(character_vocabulary.size, dtype=numpy.float64)
-        for weight, entry in zip(linear_weights, active_pool):
-          mixture += float(weight) * distributions_by_instance_identifier[
-            entry.instance_identifier]
+    if new_identifier == self.incumbent_program_identifier:
+      self.incumbent_run_length += 1
+    else:
+      self.incumbent_program_identifier = new_identifier
+      self.incumbent_run_length = 1
 
-        mixture_total = float(mixture.sum())
-        if mixture_total <= 0.0:
-          mixture = numpy.ones(character_vocabulary.size,
-                               dtype=numpy.float64) / float(
-            character_vocabulary.size)
-        else:
-          mixture = mixture / mixture_total
+  def _revalidate_candidate_buffer(self) -> None:
+    if len(self.candidate_buffer) == 0:
+      return
 
-        # Apply mixture-level probability floor.
-        floor_value = float(self.configuration.probability_floor)
-        if floor_value > 0.0:
-          uniform = numpy.ones(character_vocabulary.size,
-                               dtype=numpy.float64) / float(
-            character_vocabulary.size)
-          mixture = (1.0 - floor_value) * mixture + floor_value * uniform
-          mixture = mixture / float(mixture.sum())
+    def rescore(entry: CandidatePredictorEntry) -> CandidatePredictorEntry:
+      score_bits = self._score_candidate_minimum_description_length(
+        predictor_program=entry.predictor_program,
+        description_length_bits=float(entry.description_length_bits),
+      )
+      return CandidatePredictorEntry(
+        program_identifier=entry.program_identifier,
+        predictor_program=entry.predictor_program,
+        description_length_bits=float(entry.description_length_bits),
+        minimum_description_length_score_bits=float(score_bits),
+      )
 
-        predicted_probability = float(mixture[int(observed_character_index)])
-        algorithm_loss_bits = -math.log2(predicted_probability)
+    rescored = list(
+      self._thread_pool_executor.map(rescore, self.candidate_buffer))
+    self.candidate_buffer = rescored
+    self._trim_candidate_buffer()
+    self._insert_detectable_candidates()
 
-        per_step_algorithm_loss_bits.append(algorithm_loss_bits)
-        per_step_baseline_loss_bits.append(baseline_loss_per_character)
+  def _maybe_freeze_incumbent(self) -> None:
+    if self.incumbent_program_identifier == "":
+      return
 
-        # ---- Update weights using each predictor's probability on the observed character ----
-        for entry in active_pool:
-          distribution = distributions_by_instance_identifier[
-            entry.instance_identifier]
-          per_program_probability = float(
-            distribution[int(observed_character_index)])
-          entry.logarithmic_weight_base_two += math.log2(
-            per_program_probability)
+    should_freeze = self.freezing_policy.should_freeze(
+      time_step_index=int(self.time_step_index),
+      incumbent_program_identifier=str(self.incumbent_program_identifier),
+      incumbent_run_length=int(self.incumbent_run_length),
+      validation_buffer_length=int(len(self.validation_buffer)),
+    )
+    if not should_freeze:
+      return
 
-        # ---- Update memory with the observation ----
-        self.memory_mechanism.update(memory_state=memory_state,
-                                     observed_character_index=int(
-                                       observed_character_index))
+    incumbent_entry = next(
+      (entry for entry in self.active_pool if
+       entry.program_identifier == self.incumbent_program_identifier),
+      None,
+    )
+    if incumbent_entry is None:
+      return
 
-        # ---- Update validation window ----
-        validation_window.append(
-          ValidationExample(
-            prediction_features=current_prediction_features,
-            observed_character_index=int(observed_character_index),
-          )
-        )
-        if len(validation_window) > int(
-            self.configuration.validation_window_length):
-          validation_window = validation_window[
-            -int(self.configuration.validation_window_length):]
+    self.frozen_store.add_program(
+      program_identifier=incumbent_entry.program_identifier,
+      predictor_program=incumbent_entry.predictor_program)
 
-        # ---- Determine incumbent (highest weight) ----
-        incumbent_entry = max(active_pool, key=lambda
-          entry: entry.logarithmic_weight_base_two)
-        new_incumbent_signature = incumbent_entry.predictor_signature
-        if new_incumbent_signature == incumbent_signature:
-          incumbent_run_length += 1
-        else:
-          incumbent_signature = new_incumbent_signature
-          incumbent_run_length = 1
-
-        # ---- Explore: run transformers to propose candidates ----
-        sampled_transformers = self._sample_transformers_for_exploration()
-        transformer_futures = [
-          executor.submit(
-            transformer.generate_candidate,
-            memory_state,
-            frozen_store,
-            self.primitive_library,
-            self.memory_mechanism,
-          )
-          for transformer in sampled_transformers
-        ]
-        for future in as_completed(transformer_futures):
-          candidate = future.result()
-          if candidate is None:
-            continue
-          # Do not re-add if already present.
-          if candidate.candidate_signature in candidate_buffer_by_signature:
-            continue
-          if any(entry.predictor_signature == candidate.candidate_signature for
-                 entry in active_pool):
-            continue
-          candidate_buffer_by_signature[
-            candidate.candidate_signature] = candidate
-          # Keep buffer bounded.
-          if len(candidate_buffer_by_signature) > int(
-              self.configuration.candidate_buffer_capacity):
-            candidate_buffer_by_signature.pop(
-              next(iter(candidate_buffer_by_signature.keys())))
-
-        # ---- Validate candidates on the recent window (parallel across candidates) ----
-        if (
-            len(validation_window) > 4
-            and len(candidate_buffer_by_signature) > 0
-            and (int(time_step_index) % int(
-          self.configuration.candidate_validation_interval) == 0)
-        ):
-          baseline_loss_on_window = float(
-            len(validation_window)) * baseline_loss_per_character
-
-          def compute_candidate_loss_bits(
-              candidate: TransformerCandidate) -> float:
-            loss = 0.0
-            for example in validation_window:
-              context = DomainSpecificLanguageEvaluationContext(
-                character_vocabulary=character_vocabulary,
-                prediction_features=example.prediction_features,
-                probability_floor=self.configuration.probability_floor,
-              )
-              distribution = candidate.predictor_program.predict_character_distribution(
-                context,
-                self.primitive_library,
-                frozen_store,
-              )
-              probability_value = float(
-                distribution[int(example.observed_character_index)])
-              loss += -math.log2(probability_value)
-            return loss
-
-          candidate_loss_futures = {}
-          for signature, candidate in candidate_buffer_by_signature.items():
-            candidate_loss_futures[
-              executor.submit(compute_candidate_loss_bits, candidate)] = (
-              signature, candidate)
-
-          accepted_candidates: list[
-            tuple[str, TransformerCandidate, float]] = []
-          for future in as_completed(list(candidate_loss_futures.keys())):
-            signature, candidate = candidate_loss_futures[future]
-            loss_bits = float(future.result())
-            minimum_description_length_score = loss_bits + float(
-              candidate.transformer_description_length_bits)
-            if minimum_description_length_score <= baseline_loss_on_window - float(
-                self.configuration.detectability_slack_bits):
-              accepted_candidates.append(
-                (signature, candidate, minimum_description_length_score))
-
-          # Insert best candidates first (lowest minimum description length score).
-          accepted_candidates.sort(key=lambda item: item[2])
-
-          for signature, candidate, minimum_description_length_score in accepted_candidates:
-            # Insert with newborn weight.
-            logarithmic_total_weight_base_two = _logarithmic_sum_base_two(
-              entry.logarithmic_weight_base_two for entry in active_pool
-            )
-            initial_logarithmic_weight_base_two = self.newborn_weight_assignment_policy.compute_initial_log_weight_base_two(
-              log_total_weight_base_two=logarithmic_total_weight_base_two,
-              transformer_description_length_bits=candidate.transformer_description_length_bits,
-            )
-            new_entry = ActivePoolEntry(
-              predictor_program=candidate.predictor_program,
-              predictor_signature=candidate.candidate_signature,
-              origin_transformer_description_length_bits=candidate.transformer_description_length_bits,
-              logarithmic_weight_base_two=float(
-                initial_logarithmic_weight_base_two),
-              instance_identifier=f"active_instance_{next_active_instance_identifier_index}",
-            )
-            next_active_instance_identifier_index += 1
-            active_pool.append(new_entry)
-            # Remove from buffer so we do not repeatedly insert the same candidate.
-            candidate_buffer_by_signature.pop(signature, None)
-
-            # Enforce pool capacity (evict lowest weight but protect incumbent).
-            while len(active_pool) > int(self.configuration.pool_capacity):
-              protected_incumbent_entry = max(active_pool, key=lambda
-                entry: entry.logarithmic_weight_base_two)
-              removable_entries = [entry for entry in active_pool if
-                                   entry is not protected_incumbent_entry]
-              if len(removable_entries) == 0:
-                break
-              entry_to_remove = min(removable_entries, key=lambda
-                entry: entry.logarithmic_weight_base_two)
-              active_pool.remove(entry_to_remove)
-
-        # ---- Freeze (optional) ----
-        if (
-            len(validation_window) >= 8
-            and (int(time_step_index) % int(
-          self.configuration.freeze_evaluation_interval) == 0)
-        ):
-          incumbent_loss_bits = 0.0
-          for example in validation_window:
-            context = DomainSpecificLanguageEvaluationContext(
-              character_vocabulary=character_vocabulary,
-              prediction_features=example.prediction_features,
-              probability_floor=self.configuration.probability_floor,
-            )
-            distribution = incumbent_entry.predictor_program.predict_character_distribution(
-              context,
-              self.primitive_library,
-              frozen_store,
-            )
-            incumbent_loss_bits += -math.log2(
-              float(distribution[int(example.observed_character_index)]))
-          incumbent_average_loss_bits = incumbent_loss_bits / float(
-            len(validation_window))
-          baseline_average_loss_bits = baseline_loss_per_character
-
-          if self.freezing_policy.should_freeze(
-              time_step_index=int(time_step_index),
-              incumbent_run_length=int(incumbent_run_length),
-              incumbent_average_loss_bits=float(incumbent_average_loss_bits),
-              baseline_average_loss_bits=float(baseline_average_loss_bits),
-          ):
-            frozen_identifier = frozen_store.add_program(
-              predictor_program=incumbent_entry.predictor_program,
-              transformer_description_length_bits=incumbent_entry.origin_transformer_description_length_bits,
-            )
-            recall_key = self.memory_mechanism.build_recall_key(memory_state)
-            self.memory_mechanism.record_frozen_program_identifier(
-              memory_state=memory_state,
-              recall_key=recall_key,
-              frozen_program_identifier=frozen_identifier,
-            )
-
-        per_step_incumbent_signature.append(incumbent_signature)
-        active_pool_size_over_time.append(len(active_pool))
-        frozen_store_size_over_time.append(frozen_store.size)
-
-    return ResourceBoundedIncrementalInductionRunResult(
-      character_vocabulary=character_vocabulary,
-      per_step_algorithm_loss_bits=per_step_algorithm_loss_bits,
-      per_step_baseline_loss_bits=per_step_baseline_loss_bits,
-      per_step_incumbent_signature=per_step_incumbent_signature,
-      active_pool_size_over_time=active_pool_size_over_time,
-      frozen_store_size_over_time=frozen_store_size_over_time,
+    current_recall_key = self.memory_mechanism.build_recall_key(
+      memory_state=self.memory_state)
+    self.memory_mechanism.record_frozen_program_identifier(
+      memory_state=self.memory_state,
+      recall_key=str(current_recall_key),
+      frozen_program_identifier=str(incumbent_entry.program_identifier),
     )

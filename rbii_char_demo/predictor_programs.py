@@ -1,47 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
-import numpy as numpy
+import numpy
 
 from domain_specific_language import (
   DomainSpecificLanguageEvaluationContext,
   DomainSpecificLanguageExpression,
+  FrozenProgramStoreProtocol,
+  is_probability_distribution,
 )
-from primitive_library import PrimitiveLibrary
 
 
-class FrozenProgramStoreProtocol(Protocol):
-  def get_program(self, program_identifier: str): ...
-
-
-class PredictorProgramProtocol(Protocol):
+class PredictorProgram(Protocol):
   def predict_character_distribution(
       self,
       evaluation_context: DomainSpecificLanguageEvaluationContext,
-      primitive_library: PrimitiveLibrary,
+      primitive_library: Any,
       frozen_store: FrozenProgramStoreProtocol,
   ) -> numpy.ndarray: ...
-
-
-def _normalize_distribution(distribution: numpy.ndarray) -> numpy.ndarray:
-  total = float(distribution.sum())
-  if not numpy.isfinite(total) or total <= 0.0:
-    raise ValueError("Distribution is not normalizable.")
-  return distribution / total
-
-
-def _apply_probability_floor(distribution: numpy.ndarray,
-                             probability_floor: float) -> numpy.ndarray:
-  floor_value = float(probability_floor)
-  if floor_value <= 0.0:
-    return distribution
-  vocabulary_size = distribution.shape[0]
-  uniform = numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
-    vocabulary_size)
-  floored = (1.0 - floor_value) * distribution + floor_value * uniform
-  return _normalize_distribution(floored)
 
 
 @dataclass(frozen=True)
@@ -51,14 +29,38 @@ class DomainSpecificLanguagePredictorProgram:
   def predict_character_distribution(
       self,
       evaluation_context: DomainSpecificLanguageEvaluationContext,
-      primitive_library: PrimitiveLibrary,
+      primitive_library: Any,
       frozen_store: FrozenProgramStoreProtocol,
   ) -> numpy.ndarray:
-    result = self.expression.evaluate(evaluation_context, primitive_library,
-                                      frozen_store)
-    if not isinstance(result, numpy.ndarray):
-      raise TypeError(
-        "Predictor expression must evaluate to a numpy.ndarray distribution.")
-    normalized = _normalize_distribution(result.astype(numpy.float64))
-    return _apply_probability_floor(normalized,
-                                    evaluation_context.probability_floor)
+    vocabulary_size = int(evaluation_context.character_vocabulary.size)
+
+    try:
+      value = self.expression.evaluate(
+        evaluation_context=evaluation_context,
+        primitive_library=primitive_library,
+        frozen_store=frozen_store,
+        environment=(),
+      )
+      distribution = numpy.asarray(value, dtype=numpy.float64)
+    except Exception:
+      distribution = numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
+        vocabulary_size)
+
+    if not is_probability_distribution(distribution) or distribution.shape[
+      0] != vocabulary_size:
+      distribution = numpy.ones(vocabulary_size, dtype=numpy.float64) / float(
+        vocabulary_size)
+
+    probability_floor = float(evaluation_context.probability_floor)
+    if probability_floor > 0.0:
+      distribution = numpy.maximum(distribution, probability_floor)
+      total = float(distribution.sum())
+      if total > 0.0:
+        distribution = distribution / total
+
+    return distribution
+
+
+def domain_specific_language_predictor_program(
+    expression: DomainSpecificLanguageExpression) -> DomainSpecificLanguagePredictorProgram:
+  return DomainSpecificLanguagePredictorProgram(expression=expression)

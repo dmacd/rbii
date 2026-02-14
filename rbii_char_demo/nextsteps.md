@@ -19,6 +19,9 @@ x have claude refactor all classes to ClassName so I can actually read this
   - log full character stream
   - 
 
+    
+
+
 
 
 - what do i really want from an experiment?
@@ -28,3 +31,9 @@ x have claude refactor all classes to ClassName so I can actually read this
   - to show that language models can be formed this way and automated the 
     search for good primitives
   - 
+
+
+## next iteration
+
+- dispense with distribution predictions, i want char predictions
+- predictor language must also be universal

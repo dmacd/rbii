@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from character_vocabulary import CharacterVocabulary
@@ -16,7 +18,7 @@ from metrics import (
 from newborn_weight_policies import PriorConsistentNewbornWeightAssignmentPolicy
 from primitive_library import create_default_primitive_library
 from resource_bounded_incremental_induction import \
-  ResourceBoundedIncrementalInductionSystem
+  ResourceBoundedIncrementalInduction
 from test_scenarios import (
   build_scenario_a_context_switching,
   build_scenario_b_compositional_curriculum,
@@ -29,15 +31,45 @@ from plotting import (
   plot_reacquisition_delay,
   plot_reacquisition_excess_loss,
 )
-from transformer_programs import (
-  BigramPredictorTransformerProgram,
-  DigitCyclePredictorTransformerProgram,
-  DigitCycleStepEditTransformerProgram,
-  MixtureOfRecalledProgramsTransformerProgram,
-  RecallFrozenProgramTransformerProgram,
-  TrigramPredictorTransformerProgram,
-  UniformPredictorTransformerProgram,
-)
+# from transformer_programs import (
+#   BigramPredictorTransformerProgram,
+#   DigitCyclePredictorTransformerProgram,
+#   DigitCycleStepEditTransformerProgram,
+#   MixtureOfRecalledProgramsTransformerProgram,
+#   RecallFrozenProgramTransformerProgram,
+#   TrigramPredictorTransformerProgram,
+#   UniformPredictorTransformerProgram,
+# )
+
+
+@dataclass(frozen=True)
+class ScenarioRunResult:
+  per_step_algorithm_loss_bits: list[float]
+  per_step_baseline_loss_bits: list[float]
+
+
+def run_scenario_stream(
+    system: ResourceBoundedIncrementalInduction,
+    character_indices: list[int],
+    character_vocabulary: CharacterVocabulary,
+) -> ScenarioRunResult:
+  uniform_loss_bits_per_character = math.log2(float(character_vocabulary.size))
+  per_step_algorithm_loss_bits: list[float] = []
+  per_step_baseline_loss_bits: list[float] = []
+
+  for observed_character_index in character_indices:
+    system.step(observed_character_index=int(observed_character_index))
+
+    loss_bits = system.last_loss_bits
+    if loss_bits is None:
+      loss_bits = uniform_loss_bits_per_character
+    per_step_algorithm_loss_bits.append(float(loss_bits))
+    per_step_baseline_loss_bits.append(float(uniform_loss_bits_per_character))
+
+  return ScenarioRunResult(
+    per_step_algorithm_loss_bits=per_step_algorithm_loss_bits,
+    per_step_baseline_loss_bits=per_step_baseline_loss_bits,
+  )
 
 
 def run_scenario(scenario, outputs_directory: Path) -> None:
@@ -54,15 +86,16 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
     probability_floor=1e-3,
     detectability_slack_bits=8.0,
     reacquisition_tolerance_bits_per_character=0.25,
-    maximum_recalled_programs_per_transformer=4,
+    maximum_recalled_programs_per_step=4,
     maximum_worker_threads=None,
   )
 
   primitive_library = create_default_primitive_library()
   memory_mechanism = CharacterHistoryMemoryMechanism(
+    maximum_history_length=2048,
     maximum_context_length=16,
     recall_key_length=4,
-    smoothing_alpha=0.5,
+    # smoothing_alpha=0.5,
     maximum_program_identifiers_per_key=8,
   )
   freezing_policy = IncumbentRunLengthFreezePolicy(
@@ -71,30 +104,34 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
   )
   newborn_weight_assignment_policy = PriorConsistentNewbornWeightAssignmentPolicy()
 
-  transformers = [
-    UniformPredictorTransformerProgram(),
-    BigramPredictorTransformerProgram(),
-    TrigramPredictorTransformerProgram(),
-    RecallFrozenProgramTransformerProgram(),
-    MixtureOfRecalledProgramsTransformerProgram(),
-    DigitCycleStepEditTransformerProgram(step_change=1),
-    DigitCycleStepEditTransformerProgram(step_change=-1),
-  ]
-  for step_size in range(1, 10):
-    transformers.append(
-      DigitCyclePredictorTransformerProgram(step_size=step_size))
+  # transformers = [
+  #   UniformPredictorTransformerProgram(),
+  #   BigramPredictorTransformerProgram(),
+  #   TrigramPredictorTransformerProgram(),
+  #   RecallFrozenProgramTransformerProgram(),
+  #   MixtureOfRecalledProgramsTransformerProgram(),
+  #   DigitCycleStepEditTransformerProgram(step_change=1),
+  #   DigitCycleStepEditTransformerProgram(step_change=-1),
+  # ]
+  # for step_size in range(1, 10):
+  #   transformers.append(
+  #     DigitCyclePredictorTransformerProgram(step_size=step_size))
 
-  system = ResourceBoundedIncrementalInductionSystem(
+  system = ResourceBoundedIncrementalInduction(
+    character_vocabulary=vocabulary,
     configuration=configuration,
     primitive_library=primitive_library,
-    transformer_programs=transformers,
+    # transformer_programs=transformers,
     memory_mechanism=memory_mechanism,
     freezing_policy=freezing_policy,
     newborn_weight_assignment_policy=newborn_weight_assignment_policy,
-    random_seed=0,
+    # random_seed=0,
   )
-  run_result = system.run(character_indices=character_indices,
-                          character_vocabulary=vocabulary)
+  run_result = run_scenario_stream(
+    system=system,
+    character_indices=character_indices,
+    character_vocabulary=vocabulary,
+  )
 
   reference_loss_bits = compute_reference_loss_bits_for_scenario(scenario,
                                                                  vocabulary)
