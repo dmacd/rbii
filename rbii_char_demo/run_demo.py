@@ -29,6 +29,7 @@ from plotting import (
   plot_reacquisition_delay,
   plot_reacquisition_excess_loss,
 )
+from tqdm.auto import tqdm
 # from transformer_programs import (
 #   BigramPredictorTransformerProgram,
 #   DigitCyclePredictorTransformerProgram,
@@ -50,19 +51,30 @@ def run_scenario_stream(
     system: ResourceBoundedIncrementalInduction,
     character_indices: list[int],
     character_vocabulary: CharacterVocabulary,
+    progress_description: str,
 ) -> ScenarioRunResult:
   uniform_loss_bits_per_character = math.log2(float(character_vocabulary.size))
   per_step_algorithm_loss_bits: list[float] = []
   per_step_baseline_loss_bits: list[float] = []
 
-  for observed_character_index in character_indices:
-    system.step(observed_character_index=int(observed_character_index))
+  with tqdm(total=len(character_indices),
+            desc=progress_description,
+            unit="ch",
+            dynamic_ncols=True) as progress_bar:
+    for observed_character_index in character_indices:
+      system.step(observed_character_index=int(observed_character_index))
 
-    loss_bits = system.last_loss_bits
-    if loss_bits is None:
-      loss_bits = uniform_loss_bits_per_character
-    per_step_algorithm_loss_bits.append(float(loss_bits))
-    per_step_baseline_loss_bits.append(float(uniform_loss_bits_per_character))
+      loss_bits = system.last_loss_bits
+      if loss_bits is None:
+        loss_bits = uniform_loss_bits_per_character
+      per_step_algorithm_loss_bits.append(float(loss_bits))
+      per_step_baseline_loss_bits.append(float(uniform_loss_bits_per_character))
+
+      progress_bar.set_postfix({
+        "loss_bits": f"{float(loss_bits):.3f}",
+        "frozen_store": len(system.frozen_store.list_program_identifiers()),
+      }, refresh=False)
+      progress_bar.update(1)
 
   return ScenarioRunResult(
     per_step_algorithm_loss_bits=per_step_algorithm_loss_bits,
@@ -121,6 +133,7 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
     system=system,
     character_indices=character_indices,
     character_vocabulary=vocabulary,
+    progress_description=scenario.scenario_name,
   )
 
   reference_loss_bits = compute_reference_loss_bits_for_scenario(scenario,
