@@ -1,9 +1,9 @@
 {
   "scenario_name": "scenario_a_context_switching",
   "stream_length_characters": 24000,
-  "final_cumulative_algorithm_loss_bits": 106501.79011741732,
+  "final_cumulative_algorithm_loss_bits": 112417.1444484431,
   "final_cumulative_baseline_loss_bits": 138752.63312458995,
-  "final_cumulative_compression_gain_bits": 32250.843007172632,
+  "final_cumulative_compression_gain_bits": 26335.48867614685,
   "number_of_episodes": 8,
   "reacquisition_measurements": [
     {

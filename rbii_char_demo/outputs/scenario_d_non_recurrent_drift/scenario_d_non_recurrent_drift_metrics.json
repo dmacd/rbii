@@ -1,9 +1,9 @@
 {
   "scenario_name": "scenario_d_non_recurrent_drift",
   "stream_length_characters": 24000,
-  "final_cumulative_algorithm_loss_bits": 118899.3474649656,
+  "final_cumulative_algorithm_loss_bits": 118900.71673024347,
   "final_cumulative_baseline_loss_bits": 118900.71144923526,
-  "final_cumulative_compression_gain_bits": 1.3639842696575215,
+  "final_cumulative_compression_gain_bits": -0.0052810082124779,
   "number_of_episodes": 6,
   "reacquisition_measurements": []
 }

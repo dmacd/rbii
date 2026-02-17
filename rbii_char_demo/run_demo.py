@@ -87,8 +87,8 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
   character_indices = vocabulary.encode_text(scenario.stream_text)
 
   configuration = ResourceBoundedIncrementalInductionConfiguration(
-    pool_capacity=8,
-    exploration_transformer_executions_per_step=3,
+    pool_capacity=64,
+    exploration_transformer_executions_per_step=32,
     validation_window_length=256,
     candidate_buffer_capacity=32,
     candidate_validation_interval=32,
@@ -96,7 +96,7 @@ def run_scenario(scenario, outputs_directory: Path) -> None:
     probability_floor=1e-3,
     detectability_slack_bits=8.0,
     reacquisition_tolerance_bits_per_character=0.25,
-    maximum_recalled_programs_per_step=4,
+    maximum_recalled_programs_per_step=8,
     maximum_worker_threads=None,
   )
 
