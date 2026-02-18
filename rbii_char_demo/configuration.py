@@ -11,7 +11,7 @@ class ResourceBoundedIncrementalInductionConfiguration:
   exploration_transformer_executions_per_step: int = 3
 
   # Transformer search (DreamCoder-style enumerative search)
-  transformer_search_probability_budget_bits: int = 20
+  transformer_search_probability_budget_bits: int = 200
   transformer_search_maximum_expression_depth: int = 6
   transformer_search_maximum_expressions_per_step: int = 64
 

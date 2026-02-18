@@ -93,6 +93,14 @@ class CandidatePredictorEntry:
   minimum_description_length_score_bits: float
 
 
+@dataclass(frozen=True)
+class TransformerTrialRecord:
+  program_identifier: str
+  first_time_step_index: int
+  description_length_bits: float
+  transformer_expression: Any
+
+
 class FrozenProgramStore:
   def __init__(self) -> None:
     self._lock = threading.Lock()
@@ -170,6 +178,8 @@ class ResourceBoundedIncrementalInduction:
     self.active_pool: list[ActivePredictorEntry] = []
     self.candidate_buffer: list[CandidatePredictorEntry] = []
     self.validation_buffer: list[ValidationBufferEntry] = []
+    self.transformer_trials_by_program_identifier: dict[
+      str, TransformerTrialRecord] = {}
 
     self.time_step_index = 0
     self.incumbent_program_identifier = ""
@@ -437,6 +447,13 @@ class ResourceBoundedIncrementalInduction:
     for candidate in candidates:
       expression = candidate.transformer_expression
       program_identifier = self._compute_program_identifier(expression)
+      if program_identifier not in self.transformer_trials_by_program_identifier:
+        self.transformer_trials_by_program_identifier[program_identifier] = TransformerTrialRecord(
+          program_identifier=str(program_identifier),
+          first_time_step_index=int(self.time_step_index),
+          description_length_bits=float(candidate.description_length_bits),
+          transformer_expression=expression,
+        )
 
       if any(entry.program_identifier == program_identifier for entry in
              self.active_pool):
@@ -464,6 +481,13 @@ class ResourceBoundedIncrementalInduction:
 
     self._trim_candidate_buffer()
     self._insert_detectable_candidates()
+
+  def list_transformer_trial_records(self) -> list[TransformerTrialRecord]:
+    records = list(self.transformer_trials_by_program_identifier.values())
+    records.sort(
+      key=lambda record: (int(record.first_time_step_index),
+                          str(record.program_identifier)))
+    return records
 
   def _score_candidate_minimum_description_length(
       self,

@@ -256,6 +256,52 @@ def _write_program_snapshot_file(
   snapshot_file_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _initialize_transformer_trials_log_file(
+    log_file_path: Path,
+    scenario_name: str,
+) -> None:
+  log_file_path.parent.mkdir(parents=True, exist_ok=True)
+  header_lines: list[str] = [
+    f"scenario={scenario_name}",
+    "total_unique_transformers=0",
+    "",
+    ";; Unique transformers ever tried (deduped by program_identifier hash)",
+    ";; Appended incrementally when a new transformer appears.",
+    "",
+  ]
+  log_file_path.write_text("\n".join(header_lines), encoding="utf-8")
+
+
+def _append_transformer_trial_records(
+    log_file_path: Path,
+    trial_records: list[Any],
+    start_rank: int,
+) -> None:
+  if len(trial_records) == 0:
+    return
+
+  lines: list[str] = [
+    f";; appended_count={len(trial_records)}",
+  ]
+
+  for offset, record in enumerate(trial_records):
+    rank = int(start_rank) + offset
+    lines.append(f"(transformer_trial {rank}")
+    lines.append(f"  (program_identifier {record.program_identifier})")
+    lines.append(f"  (first_time_step {int(record.first_time_step_index)})")
+    lines.append(
+      f"  (description_length_bits {float(record.description_length_bits):.6f})")
+    lines.append("  (transformer_expression")
+    lines.append(f"    {_format_expression_as_lisp(record.transformer_expression)}")
+    lines.append("  )")
+    lines.append(")")
+    lines.append("")
+
+  with log_file_path.open("a", encoding="utf-8") as file_pointer:
+    file_pointer.write("\n".join(lines))
+    file_pointer.write("\n")
+
+
 def _format_active_pool_snapshot(
     system: ResourceBoundedIncrementalInduction,
     step_index: int,
@@ -310,6 +356,7 @@ def run_scenario_stream(
     scenario_name: str,
     clearml_logger: Any | None,
     program_snapshot_directory: Path | None,
+    transformer_trials_log_file_path: Path | None,
     program_snapshot_interval_steps: int = 100,
     pool_snapshot_interval_steps: int = 250,
 ) -> ScenarioRunResult:
@@ -319,6 +366,12 @@ def run_scenario_stream(
   previous_frozen_store_identifiers: tuple[str, ...] | None = None
   snapshot_interval_steps = max(1, int(pool_snapshot_interval_steps))
   program_snapshot_every = max(1, int(program_snapshot_interval_steps))
+  written_transformer_identifiers: set[str] = set()
+  if transformer_trials_log_file_path is not None:
+    _initialize_transformer_trials_log_file(
+      log_file_path=transformer_trials_log_file_path,
+      scenario_name=scenario_name,
+    )
 
   with tqdm(total=len(character_indices),
             desc=progress_description,
@@ -350,6 +403,21 @@ def run_scenario_stream(
           scenario_name=scenario_name,
           system=system,
         )
+
+      if transformer_trials_log_file_path is not None:
+        all_trial_records = system.list_transformer_trial_records()
+        newly_seen_trial_records = [
+          record for record in all_trial_records
+          if record.program_identifier not in written_transformer_identifiers
+        ]
+        if len(newly_seen_trial_records) > 0:
+          _append_transformer_trial_records(
+            log_file_path=transformer_trials_log_file_path,
+            trial_records=newly_seen_trial_records,
+            start_rank=len(written_transformer_identifiers) + 1,
+          )
+          written_transformer_identifiers.update(
+            record.program_identifier for record in newly_seen_trial_records)
 
       if clearml_logger is None:
         continue
@@ -463,6 +531,7 @@ def run_scenario(scenario, outputs_directory: Path,
     scenario_name=scenario.scenario_name,
     clearml_logger=clearml_logger,
     program_snapshot_directory=outputs_directory / scenario.scenario_name / "program_snapshots",
+    transformer_trials_log_file_path=outputs_directory / scenario.scenario_name / "transformers_ever_tried.log",
     program_snapshot_interval_steps=100,
     pool_snapshot_interval_steps=250,
   )
