@@ -1,2 +1,9 @@
 **/__pycache__/*
 
+!/rbii_char_demo/outputs/scenario_a_context_switching/
+
+!/rbii_char_demo/outputs/scenario_b_compositional_curriculum/
+
+!/rbii_char_demo/outputs/scenario_c_rare_glimpses/
+
+!/rbii_char_demo/outputs/scenario_d_non_recurrent_drift/
